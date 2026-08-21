@@ -78,6 +78,15 @@ type Server struct {
 	shutdownFn     context.CancelFunc
 	shuttingDown   atomic.Bool
 	tailcatAddress atomic.Pointer[string]
+
+	// config editing: path of the primary -config file (empty disables the
+	// write-back endpoints) and a callback that hot-reloads configuration.
+	configFile string
+	reloadFn   func()
+	editMu     sync.Mutex
+
+	// listenerStatus reports runtime bind state of HTTP listeners for the API.
+	listenerStatus func() []ListenerRuntimeStatus
 }
 
 func (s *Server) SetTailcatAddress(address string) {
@@ -97,6 +106,32 @@ type tailcatRequestContextKey struct{}
 func isTailcatRequest(ctx context.Context) bool {
 	marked, _ := ctx.Value(tailcatRequestContextKey{}).(bool)
 	return marked
+}
+
+// SetConfigFile enables config write-back endpoints against path. An empty
+// path disables them.
+func (s *Server) SetConfigFile(path string) {
+	s.configFile = path
+}
+
+// SetReloadFunc installs the callback used to hot-reload configuration after a
+// successful config edit. Callers must invoke it asynchronously if desired.
+func (s *Server) SetReloadFunc(fn func()) {
+	s.reloadFn = fn
+}
+
+// ListenerRuntimeStatus describes one HTTP listener's bind state.
+type ListenerRuntimeStatus struct {
+	Name   string `json:"name"`
+	Listen string `json:"listen"`
+	Bound  bool   `json:"bound"`
+	Error  string `json:"error,omitempty"`
+}
+
+// SetListenerStatusFunc installs the provider used by GET /api/listeners to
+// report which configured listeners are actually bound.
+func (s *Server) SetListenerStatusFunc(fn func() []ListenerRuntimeStatus) {
+	s.listenerStatus = fn
 }
 
 // ActiveProfile returns the active runtime profile, or an empty string when no
@@ -281,6 +316,15 @@ func (s *Server) localPeerHandler(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Listener scoping: reject models the requesting listener does not serve.
+	// Both the raw requested name (aliases may be globbed) and the resolved
+	// model ID are checked.
+	if sc := ScopeFromContext(r.Context()); !sc.Allows(data.Model, data.ModelID) {
+		s.logs.ProxyLogs.Debugf("dispatch: listener %q rejected model %q", sc.Name, data.ModelID)
+		swaputil.SendResponse(w, r, http.StatusNotFound, fmt.Sprintf("model '%s' not found", data.Model))
+		return
+	}
+
 	switch {
 	case s.local.Handles(data.ModelID):
 		s.logs.ProxyLogs.Debugf("dispatch: using local process for model: %s", data.ModelID)
@@ -422,6 +466,12 @@ func (s *Server) routes() {
 	// Registered without a method so non-POST reaches the handler and gets a
 	// 405 with Allow, rather than the mux's bare 404.
 	mux.Handle("/api/mcp", apiChain.ThenFunc(s.handleAPIMCP))
+
+	// Config editing (feature: UI model config editor + listener management).
+	mux.Handle("GET /api/models/config/{model...}", apiChain.ThenFunc(s.handleAPIGetModelConfig))
+	mux.Handle("PUT /api/models/config/{model...}", apiChain.ThenFunc(s.handleAPIPutModelConfig))
+	mux.Handle("GET /api/listeners", apiChain.ThenFunc(s.handleAPIListeners))
+	mux.Handle("PUT /api/listeners", apiChain.ThenFunc(s.handleAPIPutListeners))
 
 	s.mux = mux
 	s.handler = chain.New(CreateRequestLogMiddleware(s.logs.HttpLogs), CreateCORSMiddleware(s.cfg)).Then(mux)
