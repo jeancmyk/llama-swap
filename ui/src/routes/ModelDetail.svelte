@@ -11,6 +11,7 @@
   import ModelActivityTab from "../components/model/ModelActivityTab.svelte";
   import ModelLogsTab from "../components/model/ModelLogsTab.svelte";
   import ModelDetailsTab from "../components/model/ModelDetailsTab.svelte";
+  import ModelConfigTab from "../components/model/ModelConfigTab.svelte";
   import { modelServerPath } from "../lib/modelUtils";
   import { formatAbsoluteTime, formatUptime } from "../lib/format";
 
@@ -133,6 +134,7 @@
         <TabsTrigger value="activity">Activity</TabsTrigger>
         <TabsTrigger value="logs">Logs</TabsTrigger>
         <TabsTrigger value="details">Details</TabsTrigger>
+        <TabsTrigger value="config">Config</TabsTrigger>
       </TabsList>
 
       <!-- Activity -->
@@ -148,6 +150,11 @@
       <!-- Details -->
       <TabsContent value="details">
         <ModelDetailsTab model={model} />
+      </TabsContent>
+
+      <!-- Config -->
+      <TabsContent value="config" class="min-h-0 flex-1">
+        <ModelConfigTab {model} />
       </TabsContent>
     </Tabs>
   {/if}
