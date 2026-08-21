@@ -828,6 +828,36 @@
             "additionalProperties": false,
             "default": {}
         },
+        "listeners": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {
+                        "type": "string",
+                        "description": "Listener name shown in the UI and logs. When omitted it defaults to \"port-<port>\". Must be unique across listeners."
+                    },
+                    "listen": {
+                        "type": "string",
+                        "description": "Host and port to bind, for example \"localhost:8081\". Must be unique across listeners. An empty host binds all interfaces."
+                    },
+                    "models": {
+                        "type": "array",
+                        "items": {
+                            "type": "string",
+                            "minLength": 1
+                        },
+                        "minItems": 1,
+                        "description": "Shell-style glob patterns (path.Match) matched against local model IDs, aliases, selector IDs and peer FQNs (\"peer:model\"). Only models matching at least one pattern are served on this port; unmatched requests are rejected with 404."
+                    }
+                },
+                "required": [
+                    "listen"
+                ],
+                "additionalProperties": false
+            },
+            "description": "Additional HTTP listeners, each serving a scoped set of models. The -listen address is always bound and serves every model; entries here add scoped ports on top. A port that cannot be bound is skipped with a warning. Updates on config reload."
+        },
         "security": {
             "type": "object",
             "description": "Settings that control who may talk to llama-swap.",
