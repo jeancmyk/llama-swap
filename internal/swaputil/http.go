@@ -79,6 +79,13 @@ func ShouldIgnoreWebsocket(r *http.Request, cfg config.Config) bool {
 	return ok && mc.Compat.IgnoreWebsockets
 }
 
+// RespondJSON writes value as a JSON response with the given status.
+func RespondJSON(w http.ResponseWriter, _ *http.Request, status int, value any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(value)
+}
+
 func SendError(w http.ResponseWriter, r *http.Request, err error) {
 	var httpErr HTTPError
 	if errors.As(err, &httpErr) {

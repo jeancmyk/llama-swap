@@ -305,6 +305,11 @@ func LoadConfigFromReader(r io.Reader) (Config, error) {
 		return Config{}, err
 	}
 
+	if err := ValidateListeners(config.Listeners); err != nil {
+		return Config{}, err
+	}
+	config.Listeners = NormalizeListenerDefaults(config.Listeners)
+
 	return config, nil
 }
 

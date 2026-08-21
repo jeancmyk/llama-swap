@@ -184,6 +184,10 @@ type Config struct {
 
 	// upstream controls behaviour of the /upstream passthrough endpoint
 	Upstream UpstreamConfig `yaml:"upstream"`
+
+	// Listeners declares additional HTTP listeners, each serving a scoped set
+	// of models. When empty the single -listen address serves everything.
+	Listeners []ListenerConfig `yaml:"listeners" json:"listeners"`
 }
 
 // RoutingConfig is the canonical, normalized routing/scheduling configuration.

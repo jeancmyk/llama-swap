@@ -132,9 +132,11 @@ func filterCappedMetadata(md map[string]any) map[string]any {
 }
 
 // handleListModels serves the OpenAI-compatible model listing: local models
-// (with optional aliases) plus peer models.
+// (with optional aliases) plus peer models. Records are filtered to the
+// requesting listener's model scope when one is attached.
 func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 	created := time.Now().Unix()
+	scope := ScopeFromContext(r.Context())
 	data := make([]modelRecord, 0, len(s.cfg.Models)+len(s.cfg.Selectors))
 	running := s.local.RunningModels()
 	modelIDs := make(map[string]struct{})
@@ -194,6 +196,9 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 		if mc.Unlisted {
 			continue
 		}
+		if !scopeAllowsRecord(scope, id, mc.Aliases) {
+			continue
+		}
 		status := modelStatus(id)
 		internalMetadata := map[string]any{"type": "model"}
 		if len(mc.Aliases) > 0 {
@@ -226,6 +231,9 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 				resolvedPeer == peerID && resolvedModel == modelID {
 				modelIDs[modelID] = struct{}{}
 			}
+			if !scopeAllowsRecord(scope, fqn, []string{modelID}) {
+				continue
+			}
 			data = append(data, newRecord(
 				fqn,
 				peerID+": "+modelID,
@@ -241,6 +249,9 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 	for selectorID, selector := range s.cfg.Selectors {
 		modelIDs[selectorID] = struct{}{}
 		if selector.Unlisted {
+			continue
+		}
+		if !scopeAllowsRecord(scope, selectorID, selector.Targets) {
 			continue
 		}
 		status := "unloaded"
@@ -281,6 +292,9 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 				continue
 			}
 			if _, shadowsModel := modelIDs[pin]; shadowsModel {
+				continue
+			}
+			if !scopeAllowsRecord(scope, pin, []string{target}) {
 				continue
 			}
 			data = append(data, newRecord(
