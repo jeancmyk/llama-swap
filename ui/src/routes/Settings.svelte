@@ -2,6 +2,7 @@
   import { connectionState, themeName, themeMode, themes, type ThemeMode } from "../stores/theme";
   import { versionInfo } from "../stores/api";
   import { showCapabilityTags } from "../stores/modelDisplay";
+  import ListenersPanel from "../components/ListenersPanel.svelte";
   import * as Select from "$lib/components/ui/select/index.js";
   import * as Switch from "$lib/components/ui/switch/index.js";
   import * as Label from "$lib/components/ui/label/index.js";
@@ -20,6 +21,8 @@
   <div class="mt-4 mb-4">
     <h3 class="text-lg font-semibold">Settings</h3>
   </div>
+
+  <ListenersPanel />
 
   <div class="rounded-lg border p-4 space-y-3 max-w-md mb-4">
     <h4 class="text-sm font-semibold text-muted-foreground">Appearance</h4>

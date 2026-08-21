@@ -214,10 +214,9 @@ func main() {
 	)
 
 	desiredScopes := func(cfg config.Config) []server.ListenerScope {
-		if len(cfg.Listeners) == 0 {
-			return []server.ListenerScope{{Name: "default", Listen: listenAddr, Patterns: []string{"*"}}}
-		}
-		scopes := make([]server.ListenerScope, 0, len(cfg.Listeners))
+		// The -listen address is always the primary listener serving every
+		// model; configured listeners add scoped ports on top.
+		scopes := []server.ListenerScope{{Name: "default", Listen: listenAddr, Patterns: []string{"*"}}}
 		for _, l := range cfg.Listeners {
 			scopes = append(scopes, *server.NewListenerScope(l))
 		}
