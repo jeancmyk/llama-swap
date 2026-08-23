@@ -1,0 +1,90 @@
+# yaml-language-server: $schema=https://raw.githubusercontent.com/mostlygeek/llama-swap/refs/heads/main/config-schema.json
+# =============================================================================
+# llama-swap OS-agnostic starter configuration
+# =============================================================================
+#
+# One config that works unchanged on Windows, Linux and macOS. No absolute
+# paths are hardcoded - set two environment variables before starting:
+#
+#   LLAMACPP_SERVER   full path to your llama-server binary
+#                       Windows : E:\llama.cpp\build\bin\Release\llama-server.exe
+#                       Linux   : /opt/llama.cpp/build/bin/llama-server
+#                       macOS   : /opt/homebrew/bin/llama-server
+#   LLM_MODELS_DIR    root folder of your GGUF library
+#                       Windows : E:\LLM Models
+#                       Linux   : /mnt/ai-ssd/LLM Models
+#
+# All paths below use FORWARD slashes only: they are valid on every OS.
+# Windows accepts them in both command lines and quoted arguments.
+#
+# How this file works:
+#   ${env.NAME}    expanded from an environment variable at load time;
+#                  startup fails fast with a clear error if it is unset.
+#   macros:        named shortcuts defined once, reusable everywhere.
+#   ${PORT}        per-model port allocated automatically by llama-swap.
+#
+# For the complete list of every available option, see config.example.yaml.
+# =============================================================================
+
+macros:
+  llamacpp: "${env.LLAMACPP_SERVER}"
+  models_dir: "${env.LLM_MODELS_DIR}"
+
+healthCheckTimeout: 300
+globalTTL: 0
+startPort: 5800
+logLevel: info
+
+models:
+  # -------------------------------------------------------------------
+  # Small fast model - good first test that everything works
+  # -------------------------------------------------------------------
+  qwen3-1.7b-c32768:
+    capabilities:
+      context: 32768
+    metadata:
+      llamaswap:
+        effective_context_per_slot: "32768"
+    cmd: |
+      ${llamacpp} --jinja --port ${PORT} -m "${models_dir}/unsloth/Qwen3-1.7B-GGUF/Qwen3-1.7B-BF16.gguf" -c 32768 -fa on -ngl 99 -ctk q8_0 -ctv q8_0
+    ttl: 600
+
+  # -------------------------------------------------------------------
+  # MoE model with MTP speculative decoding + vision (mmproj)
+  # -------------------------------------------------------------------
+  qwen3.6-35b-a3b-mtp-c207872:
+    capabilities:
+      context: 207872
+    metadata:
+      llamaswap:
+        effective_context_per_slot: "207872"
+    cmd: |
+      ${llamacpp} --jinja --port ${PORT} -m "${models_dir}/unsloth/Qwen3.6-35B-A3B-MTP-GGUF/Qwen3.6-35B-A3B-UD-Q4_K_S.gguf" --mmproj "${models_dir}/unsloth/Qwen3.6-35B-A3B-MTP-GGUF/mmproj-F32.gguf" --spec-type draft-mtp --spec-draft-n-max 3 --fit on --fit-ctx 65536 --fit-target 1024 -fa on -ngl 99 -ctk q4_0 -ctv q4_0
+    ttl: 600
+
+  # -------------------------------------------------------------------
+  # Dense model stretched past its native context with YaRN
+  # -------------------------------------------------------------------
+  assistant-pepe-32b-i1-yarn-c131072:
+    capabilities:
+      context: 131072
+    metadata:
+      llamaswap:
+        effective_context_per_slot: "32768"
+    cmd: |
+      ${llamacpp} --jinja --port ${PORT} -m "${models_dir}/mradermacher/Assistant_Pepe_32B-i1-GGUF/Assistant_Pepe_32B.i1-Q4_K_M.gguf" -fa on -ngl 99 -ctk q4_0 -ctv q4_0 -np 1 --kv-unified --rope-scaling yarn --rope-scale 4 --yarn-orig-ctx 32768 --override-kv qwen3.context_length=int:131072 -c 131072
+    ttl: 600
+
+  # ===================================================================
+  # Other backends work identically: point cmd at any binary or script
+  # that serves OpenAI-style HTTP on ${PORT} - vLLM, TabbyAPI, etc.
+  #
+  # Example Linux vLLM entry (kept disabled):
+  #
+  # qwen3-1.7b-vllm-c32768:
+  #   capabilities:
+  #     context: 32768
+  #   cmd: |
+  #     ${env.VLLM_SCRIPT_QWEN17B} ${PORT}
+  #   ttl: 600
+  # ===================================================================
