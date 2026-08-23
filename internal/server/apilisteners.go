@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"os"
+	"sort"
 
 	"github.com/mostlygeek/llama-swap/internal/config"
 	"github.com/mostlygeek/llama-swap/internal/swaputil"
@@ -41,7 +42,19 @@ func (s *Server) handleAPIListeners(w http.ResponseWriter, r *http.Request) {
 		out = append(out, entry)
 	}
 
-	swaputil.RespondJSON(w, r, http.StatusOK, map[string]any{"listeners": out})
+	// Available models: the complete set of local model IDs the UI can assign
+	// to a listener, sourced from the server so the checkbox list is populated
+	// even before the client-side model store has loaded.
+	available := make([]string, 0, len(s.cfg.Models))
+	for id := range s.cfg.Models {
+		available = append(available, id)
+	}
+	sort.Strings(available)
+
+	swaputil.RespondJSON(w, r, http.StatusOK, map[string]any{
+		"listeners":        out,
+		"available_models": available,
+	})
 }
 
 // handleAPIPutListeners replaces the listeners block in the primary config
