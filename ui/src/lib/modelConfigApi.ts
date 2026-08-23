@@ -1,9 +1,21 @@
+export interface ModelFileInfo {
+  flag: string;
+  path: string;
+}
+
 export interface ModelConfigInfo {
   model_id: string;
   source_file?: string;
   editable: boolean;
   reason?: string;
   yaml: string;
+  backend_path?: string;
+  model_files?: ModelFileInfo[];
+}
+
+export interface BackendInfo {
+  path: string;
+  models: string[];
 }
 
 export interface ListenerInfo {
@@ -42,6 +54,34 @@ export async function updateModelConfig(modelId: string, yaml: string): Promise<
       body: JSON.stringify({ yaml }),
     },
   );
+}
+
+export async function addModelConfig(
+  modelId: string,
+  yaml: string,
+): Promise<{ status: string; reloading: boolean }> {
+  return requestJSON<{ status: string; reloading: boolean }>(
+    `/api/models/config/${encodeURIComponent(modelId)}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ yaml }),
+    },
+  );
+}
+
+export async function removeModelConfig(
+  modelId: string,
+): Promise<{ status: string; reloading: boolean; listeners_pruned: boolean }> {
+  return requestJSON<{ status: string; reloading: boolean; listeners_pruned: boolean }>(
+    `/api/models/config/${encodeURIComponent(modelId)}`,
+    { method: "DELETE" },
+  );
+}
+
+export async function fetchBackends(): Promise<BackendInfo[]> {
+  const state = await requestJSON<{ backends: BackendInfo[] }>("/api/backends");
+  return state.backends ?? [];
 }
 
 export async function fetchListeners(): Promise<ListenerInfo[]> {

@@ -16,18 +16,40 @@
   import type { Model } from "../lib/types";
   import ModelLoadButton from "../components/ModelLoadButton.svelte";
   import Tag from "../components/Tag.svelte";
+  import AddModelDialog from "../components/model/AddModelDialog.svelte";
+  import { removeModelConfig } from "../lib/modelConfigApi";
   import * as Card from "$lib/components/ui/card/index.js";
   import { Button } from "$lib/components/ui/button/index.js";
   import * as Switch from "$lib/components/ui/switch/index.js";
   import * as Label from "$lib/components/ui/label/index.js";
-  import { PowerOff, Loader2, ExternalLink, SquareStack } from "@lucide/svelte";
+  import * as Dialog from "$lib/components/ui/dialog/index.js";
+  import { PowerOff, Loader2, ExternalLink, SquareStack, Plus, Trash2 } from "@lucide/svelte";
   import { modelServerPath } from "../lib/modelUtils";
 
   let unloadingAll = $state(false);
+  let showAddDialog = $state(false);
+  let removeTarget = $state<Model | null>(null);
+  let removing = $state(false);
+  let removeError = $state("");
 
   onMount(() => {
     void fetchPlaygroundModels();
   });
+
+  async function handleRemoveConfirmed(): Promise<void> {
+    if (!removeTarget || removing) return;
+    removing = true;
+    removeError = "";
+    try {
+      await removeModelConfig(removeTarget.id);
+      removeTarget = null;
+      await fetchPlaygroundModels();
+    } catch (e) {
+      removeError = String(e);
+    } finally {
+      removing = false;
+    }
+  }
 
   let visibleModels = $derived(
     $showUnlisted ? $models : $models.filter((m) => !m.unlisted)
@@ -109,6 +131,18 @@
         <ExternalLink class="size-4" />
       </a>
       <ModelLoadButton {model} />
+      <button
+        type="button"
+        class="text-muted-foreground hover:text-destructive"
+        title="Remove model from config"
+        aria-label="Remove model from config"
+        onclick={() => {
+          removeError = "";
+          removeTarget = model;
+        }}
+      >
+        <Trash2 class="size-4" />
+      </button>
     {/if}
     {#if percent !== undefined}
       <!-- Loading progress; the percentage next to the state carries it for screen readers. -->
@@ -175,6 +209,14 @@
           {readyCount} ready
         </span>
         <div class="ml-auto flex items-center gap-2">
+          <Button
+            variant="outline"
+            size="sm"
+            onclick={() => (showAddDialog = true)}
+          >
+            <Plus class="size-3.5" />
+            Add model
+          </Button>
           <Button
             variant="outline"
             size="sm"
@@ -305,3 +347,38 @@
     {@render modelSection("Peer models", peerModels)}
   </div>
 </div>
+
+<AddModelDialog
+  open={showAddDialog}
+  onclose={() => (showAddDialog = false)}
+  onsaved={() => void fetchPlaygroundModels()}
+/>
+
+<Dialog.Root
+  open={removeTarget !== null}
+  onOpenChange={(v) => {
+    if (!v) removeTarget = null;
+  }}
+>
+  <Dialog.Content class="sm:max-w-md">
+    <Dialog.Header>
+      <Dialog.Title>Remove model</Dialog.Title>
+      <Dialog.Description>
+        Remove <span class="font-mono">{removeTarget?.id}</span> from the
+        configuration? Its entry is deleted from the config file and exact
+        references are dropped from custom listeners. This cannot be undone.
+      </Dialog.Description>
+    </Dialog.Header>
+    {#if removeError}
+      <p class="text-destructive text-sm">{removeError}</p>
+    {/if}
+    <Dialog.Footer class="gap-2 sm:justify-end">
+      <Button variant="outline" onclick={() => (removeTarget = null)}>
+        Cancel
+      </Button>
+      <Button variant="destructive" onclick={handleRemoveConfirmed} disabled={removing}>
+        {removing ? "Removing…" : "Remove"}
+      </Button>
+    </Dialog.Footer>
+  </Dialog.Content>
+</Dialog.Root>
