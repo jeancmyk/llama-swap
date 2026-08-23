@@ -4,39 +4,48 @@
     fetchListeners,
     updateListeners,
     type ListenerInfo,
+    type ListenersResponse,
   } from "../lib/modelConfigApi";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
 
   // Raw listener entries from the API. Checkbox selections are kept separate
-  // (keyed by listen address) so they stay reactive to the models store
-  // loading asynchronously.
+  // (keyed by listen address) so they stay reactive as models load.
   let rawListeners = $state<ListenerInfo[]>([]);
   let selections = $state<Record<string, string[]>>({});
+  let availableModels = $state<string[]>([]);
   let loadError = $state("");
   let saving = $state(false);
   let saveMessage = $state("");
   let saveError = $state("");
   let filterText = $state("");
 
-  let localModelIds = $derived(
-    $models.filter((m) => !m.peerID && m.playgroundType === "model").map((m) => m.id),
+  // Fallback catalogue when the server response lacks available_models
+  // (older server): derive from the client model store.
+  let storeModelIds = $derived(
+    $models.filter((m) => !m.peerID).map((m) => m.id),
   );
+
+  // The models offered as checkboxes. Prefer the server-provided universe;
+  // fall back to the store. Always sorted for a stable list.
+  let checkableIds = $derived.by(() => {
+    const source = availableModels.length > 0 ? availableModels : storeModelIds;
+    return [...source].sort((a, b) => a.localeCompare(b, undefined, { numeric: true }));
+  });
 
   function isGlob(pattern: string): boolean {
     return /[*?]/.test(pattern);
   }
 
-  // Exact configured model IDs that exist in the current model list — these
-  // are representable as ticked checkboxes.
+  // Exact configured model IDs that exist in the current model universe.
   function exactConfigured(l: ListenerInfo): string[] {
-    return (l.models ?? []).filter((p) => !isGlob(p) && localModelIds.includes(p));
+    return (l.models ?? []).filter((p) => !isGlob(p) && checkableIds.includes(p));
   }
 
   // Glob patterns or stale exact IDs that cannot be shown as checkboxes;
   // preserved verbatim on save.
   function legacyPatterns(l: ListenerInfo): string[] {
-    return (l.models ?? []).filter((p) => isGlob(p) || !localModelIds.includes(p));
+    return (l.models ?? []).filter((p) => isGlob(p) || !checkableIds.includes(p));
   }
 
   function selectedFor(l: ListenerInfo): string[] {
@@ -51,17 +60,22 @@
 
   function filteredModels(): string[] {
     const needle = filterText.trim().toLowerCase();
-    if (!needle) return localModelIds;
-    return localModelIds.filter((id) => id.toLowerCase().includes(needle));
+    if (!needle) return checkableIds;
+    return checkableIds.filter((id) => id.toLowerCase().includes(needle));
   }
 
   $effect(() => {
-    // The checkbox list needs the model catalogue; make sure it is loaded
-    // even when this panel mounts before any page fetched it.
-    if ($models.length === 0) void fetchPlaygroundModels();
+    // Keep the client store warm as a fallback catalogue. Re-runs when the
+    // store changes, but only matters when the server provided no universe.
+    if (availableModels.length === 0) void storeModelIds;
+    fetchPlaygroundModels().catch(() => {});
+  });
+
+  $effect(() => {
     fetchListeners()
-      .then((list) => {
-        rawListeners = list;
+      .then((resp: ListenersResponse) => {
+        rawListeners = resp.listeners ?? [];
+        if (resp.available_models) availableModels = resp.available_models;
       })
       .catch((err) => {
         loadError = String(err);
@@ -69,10 +83,7 @@
   });
 
   function addListener() {
-    rawListeners = [
-      ...rawListeners,
-      { name: "", listen: "127.0.0.1:", models: [] },
-    ];
+    rawListeners = [...rawListeners, { name: "", listen: "127.0.0.1:", models: [] }];
   }
 
   function removeListener(index: number) {
@@ -89,14 +100,14 @@
         name: l.name.trim(),
         listen: l.listen.trim(),
         // preserved globs first so exact selections remain visible in configs
-        models: [...legacyPatterns(l), ...localModelIds.filter((id) => selectedFor(l).includes(id))],
+        models: [...legacyPatterns(l), ...checkableIds.filter((id) => selectedFor(l).includes(id))],
       }));
       await updateListeners(payload);
       saveMessage =
         "Saved. llama-swap is reloading — new ports open in a moment; running models stop and start on their next request.";
       fetchListeners()
-        .then((list) => {
-          rawListeners = list;
+        .then((resp) => {
+          rawListeners = resp.listeners ?? [];
         })
         .catch(() => {});
     } catch (err) {
@@ -146,8 +157,8 @@
         </div>
 
         <div class="bg-background max-h-52 overflow-y-auto rounded-md border">
-          {#if $models.length === 0}
-            <p class="text-muted-foreground px-3 py-2 text-xs">Loading models…</p>
+          {#if checkableIds.length === 0}
+            <p class="text-muted-foreground px-3 py-2 text-xs">No models to show.</p>
           {:else if filteredModels().length === 0}
             <p class="text-muted-foreground px-3 py-2 text-xs">No models match this filter.</p>
           {:else}

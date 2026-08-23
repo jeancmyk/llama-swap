@@ -84,9 +84,13 @@ export async function fetchBackends(): Promise<BackendInfo[]> {
   return state.backends ?? [];
 }
 
-export async function fetchListeners(): Promise<ListenerInfo[]> {
-  const state = await requestJSON<{ listeners: ListenerInfo[] }>("/api/listeners");
-  return state.listeners ?? [];
+export interface ListenersResponse {
+  listeners: ListenerInfo[];
+  available_models?: string[];
+}
+
+export async function fetchListeners(): Promise<ListenersResponse> {
+  return requestJSON<ListenersResponse>("/api/listeners");
 }
 
 export async function updateListeners(listeners: ListenerInfo[]): Promise<{ status: string; reloading: boolean }> {

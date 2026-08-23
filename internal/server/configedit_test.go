@@ -216,6 +216,24 @@ func TestListenersAPI_PutRejectsDuplicates(t *testing.T) {
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
 
+func TestListenersAPI_Get_ReturnsAvailableModels(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(editTestConfigListeners), 0o644))
+
+	s := editTestServerRaw(t, editTestConfigListeners, path)
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/listeners", nil))
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	var resp struct {
+		AvailableModels []string `json:"available_models"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	// every configured local model ID is offered, sorted
+	assert.Equal(t, []string{"alpha", "beta"}, resp.AvailableModels)
+}
+
 // editTestConfigListeners seeds an explicit listeners block: roleplay pins
 // beta exactly, port-8091 matches al* by glob.
 const editTestConfigListeners = `# editable test config with listeners
