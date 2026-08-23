@@ -470,8 +470,11 @@ func (s *Server) routes() {
 	// Config editing (feature: UI model config editor + listener management).
 	mux.Handle("GET /api/models/config/{model...}", apiChain.ThenFunc(s.handleAPIGetModelConfig))
 	mux.Handle("PUT /api/models/config/{model...}", apiChain.ThenFunc(s.handleAPIPutModelConfig))
+	mux.Handle("POST /api/models/config/{model...}", apiChain.ThenFunc(s.handleAPIAddModelConfig))
+	mux.Handle("DELETE /api/models/config/{model...}", apiChain.ThenFunc(s.handleAPIRemoveModelConfig))
 	mux.Handle("GET /api/listeners", apiChain.ThenFunc(s.handleAPIListeners))
 	mux.Handle("PUT /api/listeners", apiChain.ThenFunc(s.handleAPIPutListeners))
+	mux.Handle("GET /api/backends", apiChain.ThenFunc(s.handleAPIBackends))
 
 	s.mux = mux
 	s.handler = chain.New(CreateRequestLogMiddleware(s.logs.HttpLogs), CreateCORSMiddleware(s.cfg)).Then(mux)

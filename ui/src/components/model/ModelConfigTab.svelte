@@ -25,6 +25,18 @@
   let dirty = $derived(info !== null && editedYaml !== info.yaml);
   let readOnly = $derived(info !== null && !info.editable);
 
+  // Paths panel content: backend executable followed by each model file
+  // argument, rendered as a plain read-only listing.
+  let pathsText = $derived.by(() => {
+    if (!info) return "";
+    const lines: string[] = [];
+    if (info.backend_path) lines.push(`backend:  ${info.backend_path}`);
+    for (const file of info.model_files ?? []) {
+      lines.push(`${file.flag.padEnd(18)} ${file.path}`);
+    }
+    return lines.join("\n");
+  });
+
   $effect(() => {
     const id = model.id;
     info = null;
@@ -71,6 +83,20 @@
 </script>
 
 <div class="flex min-h-0 flex-col gap-3">
+  {#if info && (info.backend_path || (info.model_files && info.model_files.length > 0))}
+    <Card.Root class="shrink-0 gap-0 overflow-hidden py-0">
+      <Card.Header class="flex flex-row items-center gap-3 border-b px-4 py-2">
+        <Card.Title class="text-sm font-semibold">Paths</Card.Title>
+        <span class="text-muted-foreground text-xs">
+          Backend executable and model file locations (read-only)
+        </span>
+      </Card.Header>
+      <Card.Content class="p-3">
+        <pre class="bg-muted/40 overflow-x-auto rounded-md border p-3 font-mono text-xs" spellcheck="false">{pathsText}</pre>
+      </Card.Content>
+    </Card.Root>
+  {/if}
+
   <Card.Root class="shrink-0 gap-0 overflow-hidden py-0">
     <Card.Header class="flex flex-row items-center gap-3 border-b px-4 py-2">
       <Card.Title class="text-sm font-semibold">Config</Card.Title>

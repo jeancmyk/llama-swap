@@ -136,6 +136,66 @@ func PatchModelYAML(data []byte, modelID, replacement string) ([]byte, error) {
 	return encodeNode(doc)
 }
 
+// RemoveModelYAML deletes the models.<modelID> entry from data and returns
+// the patched document bytes. Returns ErrModelNotInFile when the model ID
+// does not exist in this document.
+func RemoveModelYAML(data []byte, modelID string) ([]byte, error) {
+	doc, err := yamlNodeRoundTrip(data)
+	if err != nil {
+		return nil, err
+	}
+	models, err := findModelsMapping(doc)
+	if err != nil {
+		return nil, err
+	}
+	_, _, idx, found := findModelEntry(models, modelID)
+	if !found {
+		return nil, ErrModelNotInFile
+	}
+	models.Content = append(models.Content[:idx], models.Content[idx+2:]...)
+	return encodeNode(doc)
+}
+
+// RemoveModelFromListeners drops exact-match entries of modelID from every
+// listener's models list in data. Glob patterns are never touched. The
+// second return reports whether anything changed.
+func RemoveModelFromListeners(data []byte, modelID string) ([]byte, bool, error) {
+	doc, err := yamlNodeRoundTrip(data)
+	if err != nil {
+		return nil, false, err
+	}
+	root := doc.Content[0]
+	listeners, _, ok := findTopLevelKey(root, "listeners")
+	if !ok || listeners.Kind != yaml.SequenceNode {
+		return data, false, nil
+	}
+
+	changed := false
+	for _, item := range listeners.Content {
+		if item.Kind != yaml.MappingNode {
+			continue
+		}
+		modelsVal, _, ok := findTopLevelKey(item, "models")
+		if !ok || modelsVal.Kind != yaml.SequenceNode {
+			continue
+		}
+		kept := modelsVal.Content[:0]
+		for _, pat := range modelsVal.Content {
+			if pat.Kind == yaml.ScalarNode && pat.Value == modelID {
+				changed = true
+				continue
+			}
+			kept = append(kept, pat)
+		}
+		modelsVal.Content = kept
+	}
+	if !changed {
+		return data, false, nil
+	}
+	out, err := encodeNode(doc)
+	return out, true, err
+}
+
 // PatchTopLevelKey sets or replaces a top-level key with the given value node,
 // appending it when missing. Used for persisting `listeners:` edits.
 func PatchTopLevelKey(data []byte, key string, value *yaml.Node) ([]byte, error) {

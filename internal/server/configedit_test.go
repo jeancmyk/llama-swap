@@ -215,3 +215,171 @@ func TestListenersAPI_PutRejectsDuplicates(t *testing.T) {
 	s.ServeHTTP(w, httptest.NewRequest(http.MethodPut, "/api/listeners", strings.NewReader(body)))
 	assert.Equal(t, http.StatusBadRequest, w.Code)
 }
+
+// editTestConfigListeners seeds an explicit listeners block: roleplay pins
+// beta exactly, port-8091 matches al* by glob.
+const editTestConfigListeners = `# editable test config with listeners
+models:
+  alpha:
+    cmd: echo alpha ${PORT}
+    ttl: 300
+  beta:
+    cmd: echo beta ${PORT}
+listeners:
+  - name: roleplay
+    listen: 127.0.0.1:8092
+    models:
+      - beta
+      - al*
+`
+
+// editTestServerRaw is editTestServer with caller-provided config text.
+func editTestServerRaw(t *testing.T, cfgText, cfgPath string) *Server {
+	t.Helper()
+
+	cfg, err := config.LoadConfigFromReader(strings.NewReader(cfgText))
+	require.NoError(t, err)
+
+	s := newTestServer(
+		newStubRouter(mustModelIDs(t, cfg), "ok"),
+		newStubRouter(nil, ""),
+	)
+	s.cfg = cfg
+	if cfgPath != "" {
+		s.SetConfigFile(cfgPath)
+		s.SetReloadFunc(func() {
+			data, err := os.ReadFile(cfgPath)
+			if err != nil {
+				return
+			}
+			if newCfg, err := config.LoadConfigFromReader(strings.NewReader(string(data))); err == nil {
+				s.cfg = newCfg
+			}
+		})
+	}
+	return s
+}
+
+func mustModelIDs(t *testing.T, cfg config.Config) []string {
+	t.Helper()
+	ids := make([]string, 0, len(cfg.Models))
+	for id := range cfg.Models {
+		ids = append(ids, id)
+	}
+	return ids
+}
+
+func TestProxy_ConfigAPI_GetReturnsPaths(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	cfgText := `models:
+  vision:
+    cmd: |
+      /opt/llama-server --jinja --port ${PORT} -m "/mnt/models/x.gguf" --mmproj "/mnt/models/mm.gguf" --model-draft "/mnt/models/draft.gguf"
+`
+	require.NoError(t, os.WriteFile(path, []byte(cfgText), 0o644))
+
+	s := editTestServerRaw(t, cfgText, path)
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/models/config/vision", nil))
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	var resp struct {
+		BackendPath string `json:"backend_path"`
+		ModelFiles  []struct {
+			Flag string `json:"flag"`
+			Path string `json:"path"`
+		} `json:"model_files"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "/opt/llama-server", resp.BackendPath)
+	require.Len(t, resp.ModelFiles, 3)
+	assert.Equal(t, "-m", resp.ModelFiles[0].Flag)
+	assert.Equal(t, "/mnt/models/x.gguf", resp.ModelFiles[0].Path)
+	assert.Equal(t, "--mmproj", resp.ModelFiles[1].Flag)
+	assert.Equal(t, "--model-draft", resp.ModelFiles[2].Flag)
+}
+
+func TestProxy_ConfigAPI_BackendsListing(t *testing.T) {
+	s := editTestServer(t, "")
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/backends", nil))
+	require.Equal(t, http.StatusOK, w.Code)
+
+	var resp struct {
+		Backends []struct {
+			Path   string   `json:"path"`
+			Models []string `json:"models"`
+		} `json:"backends"`
+	}
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	// both stub models run `echo <id>`, so the single unique backend is echo
+	require.Len(t, resp.Backends, 1)
+	assert.Equal(t, "echo", resp.Backends[0].Path)
+	assert.ElementsMatch(t, []string{"alpha", "beta"}, resp.Backends[0].Models)
+}
+
+func TestProxy_ConfigAPI_AddModel_LeavesListenersUntouched(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(editTestConfigListeners), 0o644))
+
+	s := editTestServerRaw(t, editTestConfigListeners, path)
+
+	body := `{"yaml": "cmd: echo gamma ${PORT}\nttl: 60\n"}`
+	req := httptest.NewRequest(http.MethodPost, "/api/models/config/gamma", strings.NewReader(body))
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	onDisk, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Contains(t, string(onDisk), "echo gamma ${PORT}")
+
+	// reload picks up the new model
+	require.Eventually(t, func() bool {
+		_, ok := s.cfg.Models["gamma"]
+		return ok
+	}, 2*time.Second, 10*time.Millisecond)
+
+	// the custom listener must NOT have gained gamma; exact and glob
+	// patterns stay byte-identical
+	require.Len(t, s.cfg.Listeners, 1)
+	assert.Equal(t, []string{"beta", "al*"}, s.cfg.Listeners[0].Models)
+
+	// duplicate add rejected
+	req = httptest.NewRequest(http.MethodPost, "/api/models/config/alpha", strings.NewReader(body))
+	w = httptest.NewRecorder()
+	s.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusConflict, w.Code)
+}
+
+func TestProxy_ConfigAPI_RemoveModel_PrunesExactListenerEntries(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(editTestConfigListeners), 0o644))
+
+	s := editTestServerRaw(t, editTestConfigListeners, path)
+
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, httptest.NewRequest(http.MethodDelete, "/api/models/config/beta", nil))
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	onDisk, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.NotContains(t, string(onDisk), "echo beta")
+	assert.Contains(t, string(onDisk), "echo alpha")
+
+	// exact entry pruned from the listener, glob pattern preserved
+	require.Eventually(t, func() bool {
+		_, ok := s.cfg.Models["beta"]
+		return !ok
+	}, 2*time.Second, 10*time.Millisecond)
+	require.Len(t, s.cfg.Listeners, 1)
+	assert.Equal(t, []string{"al*"}, s.cfg.Listeners[0].Models)
+
+	// removing an unknown model 404s
+	w = httptest.NewRecorder()
+	s.ServeHTTP(w, httptest.NewRequest(http.MethodDelete, "/api/models/config/beta", nil))
+	assert.Equal(t, http.StatusNotFound, w.Code)
+}
