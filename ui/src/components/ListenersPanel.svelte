@@ -1,5 +1,5 @@
 <script lang="ts">
-  import { models } from "../stores/api";
+  import { fetchPlaygroundModels, models } from "../stores/api";
   import {
     fetchListeners,
     updateListeners,
@@ -8,45 +8,45 @@
   import { Button } from "$lib/components/ui/button/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
 
-  interface EditableListener {
-    name: string;
-    listen: string;
-    // exact model IDs ticked by the user via checkboxes
-    selected: string[];
-    // pre-existing glob patterns (or stale exact IDs) that cannot be
-    // represented as checkboxes; preserved verbatim on save
-    legacyPatterns: string[];
-    bound?: boolean;
-    error?: string;
-  }
-
-  let listeners = $state<EditableListener[]>([]);
+  // Raw listener entries from the API. Checkbox selections are kept separate
+  // (keyed by listen address) so they stay reactive to the models store
+  // loading asynchronously.
+  let rawListeners = $state<ListenerInfo[]>([]);
+  let selections = $state<Record<string, string[]>>({});
   let loadError = $state("");
   let saving = $state(false);
   let saveMessage = $state("");
   let saveError = $state("");
   let filterText = $state("");
 
-  // local model IDs available for assignment
   let localModelIds = $derived(
     $models.filter((m) => !m.peerID && m.playgroundType === "model").map((m) => m.id),
   );
 
-  function splitPatterns(patterns: string[], knownIds: string[]): { selected: string[]; legacy: string[] } {
-    const selected: string[] = [];
-    const legacy: string[] = [];
-    for (const p of patterns) {
-      if (!p) continue;
-      const isGlob = /[*?]/.test(p);
-      if (!isGlob && knownIds.includes(p)) selected.push(p);
-      else legacy.push(p);
-    }
-    return { selected, legacy };
+  function isGlob(pattern: string): boolean {
+    return /[*?]/.test(pattern);
   }
 
-  function toEditable(l: ListenerInfo): EditableListener {
-    const { selected, legacy } = splitPatterns(l.models ?? [], localModelIds);
-    return { name: l.name, listen: l.listen, selected, legacyPatterns: legacy, bound: l.bound, error: l.error };
+  // Exact configured model IDs that exist in the current model list — these
+  // are representable as ticked checkboxes.
+  function exactConfigured(l: ListenerInfo): string[] {
+    return (l.models ?? []).filter((p) => !isGlob(p) && localModelIds.includes(p));
+  }
+
+  // Glob patterns or stale exact IDs that cannot be shown as checkboxes;
+  // preserved verbatim on save.
+  function legacyPatterns(l: ListenerInfo): string[] {
+    return (l.models ?? []).filter((p) => isGlob(p) || !localModelIds.includes(p));
+  }
+
+  function selectedFor(l: ListenerInfo): string[] {
+    return selections[l.listen] ?? exactConfigured(l);
+  }
+
+  function toggleModel(l: ListenerInfo, id: string, checked: boolean) {
+    const current = selectedFor(l);
+    const next = checked ? [...current, id] : current.filter((s) => s !== id);
+    selections = { ...selections, [l.listen]: next };
   }
 
   function filteredModels(): string[] {
@@ -55,18 +55,13 @@
     return localModelIds.filter((id) => id.toLowerCase().includes(needle));
   }
 
-  function toggleModel(listener: EditableListener, id: string, checked: boolean) {
-    if (checked) {
-      if (!listener.selected.includes(id)) listener.selected.push(id);
-    } else {
-      listener.selected = listener.selected.filter((s) => s !== id);
-    }
-  }
-
   $effect(() => {
+    // The checkbox list needs the model catalogue; make sure it is loaded
+    // even when this panel mounts before any page fetched it.
+    if ($models.length === 0) void fetchPlaygroundModels();
     fetchListeners()
       .then((list) => {
-        listeners = list.map(toEditable);
+        rawListeners = list;
       })
       .catch((err) => {
         loadError = String(err);
@@ -74,11 +69,14 @@
   });
 
   function addListener() {
-    listeners = [...listeners, { name: "", listen: "127.0.0.1:", selected: [], legacyPatterns: [] }];
+    rawListeners = [
+      ...rawListeners,
+      { name: "", listen: "127.0.0.1:", models: [] },
+    ];
   }
 
   function removeListener(index: number) {
-    listeners = listeners.filter((_, i) => i !== index);
+    rawListeners = rawListeners.filter((_, i) => i !== index);
   }
 
   async function save() {
@@ -87,18 +85,18 @@
     saveMessage = "";
     saveError = "";
     try {
-      const payload: ListenerInfo[] = listeners.map((l) => ({
+      const payload: ListenerInfo[] = rawListeners.map((l) => ({
         name: l.name.trim(),
         listen: l.listen.trim(),
-        // legacy globs first so exact selections remain visible in configs
-        models: [...l.legacyPatterns, ...localModelIds.filter((id) => l.selected.includes(id))],
+        // preserved globs first so exact selections remain visible in configs
+        models: [...legacyPatterns(l), ...localModelIds.filter((id) => selectedFor(l).includes(id))],
       }));
       await updateListeners(payload);
       saveMessage =
         "Saved. llama-swap is reloading — new ports open in a moment; running models stop and start on their next request.";
       fetchListeners()
         .then((list) => {
-          listeners = list.map(toEditable);
+          rawListeners = list;
         })
         .catch(() => {});
     } catch (err) {
@@ -121,7 +119,7 @@
   {#if loadError}
     <p class="text-destructive text-sm">{loadError}</p>
   {:else}
-    {#if listeners.length === 0}
+    {#if rawListeners.length === 0}
       <p class="text-muted-foreground text-sm">
         No extra listeners configured. The main <code>-listen</code> address serves every model.
       </p>
@@ -129,7 +127,7 @@
       <Input class="max-w-xs" placeholder="Filter models…" bind:value={filterText} />
     {/if}
 
-    {#each listeners as l, i (i)}
+    {#each rawListeners as l, i (l.listen + String(i))}
       <div class="rounded-md border p-3 space-y-2">
         <div class="flex items-center gap-2">
           <Input class="w-36" placeholder="name" bind:value={l.name} />
@@ -148,7 +146,9 @@
         </div>
 
         <div class="bg-background max-h-52 overflow-y-auto rounded-md border">
-          {#if filteredModels().length === 0}
+          {#if $models.length === 0}
+            <p class="text-muted-foreground px-3 py-2 text-xs">Loading models…</p>
+          {:else if filteredModels().length === 0}
             <p class="text-muted-foreground px-3 py-2 text-xs">No models match this filter.</p>
           {:else}
             <div class="grid grid-cols-1 gap-x-4 p-2 sm:grid-cols-2">
@@ -157,7 +157,7 @@
                   <input
                     type="checkbox"
                     class="accent-primary size-3.5"
-                    checked={l.selected.includes(id)}
+                    checked={selectedFor(l).includes(id)}
                     onchange={(e) => toggleModel(l, id, e.currentTarget.checked)}
                   />
                   <span class="truncate font-mono text-xs">{id}</span>
@@ -168,12 +168,12 @@
         </div>
 
         <p class="text-muted-foreground text-xs">
-          {#if l.selected.length === 0 && l.legacyPatterns.length === 0}
+          {#if selectedFor(l).length === 0 && legacyPatterns(l).length === 0}
             Nothing selected — this port would serve nothing.
           {:else}
-            Serves {l.selected.length} ticked model{l.selected.length === 1 ? "" : "s"}
-            {#if l.legacyPatterns.length > 0}
-              + preserved glob/stale patterns: <span class="font-mono">{l.legacyPatterns.join(", ")}</span>
+            Serves {selectedFor(l).length} ticked model{selectedFor(l).length === 1 ? "" : "s"}
+            {#if legacyPatterns(l).length > 0}
+              + preserved glob/stale patterns: <span class="font-mono">{legacyPatterns(l).join(", ")}</span>
             {/if}
           {/if}
         </p>
@@ -186,7 +186,7 @@
       <p class="text-destructive text-xs">{saveError}</p>
     {/if}
 
-    {#if listeners.length > 0}
+    {#if rawListeners.length > 0}
       <div class="flex justify-end">
         <Button size="sm" onclick={save} disabled={saving}>
           {saving ? "Saving…" : "Save & Restart"}

@@ -1,6 +1,6 @@
 <script lang="ts">
   import { link } from "svelte-spa-router";
-  import { FerrisWheel, Boxes, Activity, Cat, ScrollText, Gauge, Cpu, Sun, Moon, Monitor, ChevronRight, Settings, CircleQuestionMark } from "@lucide/svelte";
+  import { FerrisWheel, Boxes, Activity, Cat, ScrollText, Gauge, Cpu, Network, Sun, Moon, Monitor, ChevronRight, Settings, CircleQuestionMark } from "@lucide/svelte";
   import * as Sidebar from "$lib/components/ui/sidebar/index.js";
   import * as Collapsible from "$lib/components/ui/collapsible/index.js";
   import { Button } from "$lib/components/ui/button/index.js";
@@ -208,6 +208,17 @@
               </Sidebar.MenuButton>
             </Sidebar.MenuItem>
           {/if}
+
+          <Sidebar.MenuItem>
+            <Sidebar.MenuButton isActive={isActive("/ports", $currentRoute)} tooltipContent="Ports">
+              {#snippet child({ props })}
+                <a href="/ports" use:link {...props}>
+                  <Network />
+                  <span>Ports</span>
+                </a>
+              {/snippet}
+            </Sidebar.MenuButton>
+          </Sidebar.MenuItem>
 
           <Sidebar.MenuItem>
             <Sidebar.MenuButton isActive={isActive("/hardware", $currentRoute)} tooltipContent="Hardware">
