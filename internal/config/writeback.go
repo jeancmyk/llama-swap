@@ -195,6 +195,7 @@ func SetModelNameYAML(data []byte, modelID, name string) ([]byte, error) {
 //   - listeners[].models (glob patterns are never touched)
 //   - routing.router.settings.groups[].members and the legacy top-level
 //     groups[].members
+//   - routing.scheduler.settings.fifo.priority keys
 //   - selectors[].targets
 //   - profiles[].pins keys and values
 //   - hooks.on_startup.preload
@@ -242,6 +243,8 @@ func RenameModelYAML(data []byte, oldID, newID string) ([]byte, error) {
 		}
 	}
 	rewriteGroupMapping(root, "groups", oldID, newID)
+	rewriteSelectorTargets(root, oldID, newID)
+	rewriteProfilePins(root, oldID, newID)
 	if routing, _, ok := findTopLevelKey(root, "routing"); ok && routing.Kind == yaml.MappingNode {
 		if router, _, ok := findTopLevelKey(routing, "router"); ok && router.Kind == yaml.MappingNode {
 			if settings, _, ok := findTopLevelKey(router, "settings"); ok && settings.Kind == yaml.MappingNode {
@@ -249,9 +252,10 @@ func RenameModelYAML(data []byte, oldID, newID string) ([]byte, error) {
 				rewriteMatrixBlock(settings, "matrix", oldID, newID)
 			}
 		}
+		if scheduler, _, ok := findTopLevelKey(routing, "scheduler"); ok && scheduler.Kind == yaml.MappingNode {
+			rewriteFifoPriority(scheduler, oldID, newID)
+		}
 	}
-	rewriteSelectorTargets(root, oldID, newID)
-	rewriteProfilePins(root, oldID, newID)
 	if hooks, _, ok := findTopLevelKey(root, "hooks"); ok && hooks.Kind == yaml.MappingNode {
 		if onStartup, _, ok := findTopLevelKey(hooks, "on_startup"); ok && onStartup.Kind == yaml.MappingNode {
 			if pre, _, ok := findTopLevelKey(onStartup, "preload"); ok {
@@ -262,6 +266,29 @@ func RenameModelYAML(data []byte, oldID, newID string) ([]byte, error) {
 	rewriteMatrixBlock(root, "matrix", oldID, newID)
 
 	return encodeNode(doc)
+}
+
+// rewriteFifoPriority renames an exact oldID key inside
+// scheduler.settings.fifo.priority (the values are integers, so only keys
+// can reference a model).
+func rewriteFifoPriority(scheduler *yaml.Node, oldID, newID string) {
+	settings, _, ok := findTopLevelKey(scheduler, "settings")
+	if !ok || settings.Kind != yaml.MappingNode {
+		return
+	}
+	fifo, _, ok := findTopLevelKey(settings, "fifo")
+	if !ok || fifo.Kind != yaml.MappingNode {
+		return
+	}
+	priority, _, ok := findTopLevelKey(fifo, "priority")
+	if !ok || priority.Kind != yaml.MappingNode {
+		return
+	}
+	for i := 0; i+1 < len(priority.Content); i += 2 {
+		if priority.Content[i].Value == oldID {
+			priority.Content[i].Value = newID
+		}
+	}
 }
 
 // rewriteSequenceScalars replaces scalar elements of a sequence that

@@ -28,8 +28,9 @@ listeners:                               listeners:
 
 **What gets updated:** the `models:` key; exact references in `listeners`, routing
 groups, selector targets, profile pins, `hooks.on_startup.preload`, matrix `vars`,
-`evict_costs` and set DSLs. **What does not:** glob patterns (`qwen*`), other
-models' `aliases`, peer configs, and past activity entries.
+`evict_costs` and set DSLs, and `routing.scheduler.settings.fifo.priority` keys.
+**What does not:** glob patterns (`qwen*`), other models' `aliases`, peer configs,
+and past activity entries.
 
 A running model stops during the reload and starts under the new ID on its next
 request. Clients that still send the old ID get a 404 — if you want the old URL

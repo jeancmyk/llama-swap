@@ -245,6 +245,12 @@ routing:
           v1: 2
         sets:
           main: "old-name | beta"
+  scheduler:
+    settings:
+      fifo:
+        priority:
+          old-name: 10
+          beta: 5
 
 peers:
   remote:
@@ -275,6 +281,12 @@ func TestWriteback_RenameModelYAML_RenamesKeyAndReferences(t *testing.T) {
 	require.NotNil(t, matrix)
 	assert.Equal(t, "new-name", matrix.Var["v1"])
 	assert.Equal(t, "new-name | beta", matrix.Sets[0].DSL)
+
+	// scheduler fifo priority keys follow the rename
+	priority := cfg.Routing.Scheduler.Settings.Fifo.Priority
+	assert.Equal(t, 10, priority["new-name"])
+	assert.Equal(t, 5, priority["beta"])
+	assert.NotContains(t, priority, "old-name")
 
 	// untouched: comments, cmd strings, globs, peer models, other aliases
 	assert.Contains(t, out, "# top comment")
