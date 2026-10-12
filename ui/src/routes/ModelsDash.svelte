@@ -17,7 +17,7 @@
   import type { Model } from "../lib/types";
   import ModelLoadButton from "../components/ModelLoadButton.svelte";
   import Tag from "../components/Tag.svelte";
-  import AddModelDialog from "../components/model/AddModelDialog.svelte";
+  import { push } from "svelte-spa-router";
   import { removeModelConfig, triggerReload } from "../lib/modelConfigApi";
   import * as Card from "$lib/components/ui/card/index.js";
   import { Button } from "$lib/components/ui/button/index.js";
@@ -28,7 +28,6 @@
   import { modelServerPath } from "../lib/modelUtils";
 
   let unloadingAll = $state(false);
-  let showAddDialog = $state(false);
   let removeTarget = $state<Model | null>(null);
   let removing = $state(false);
   let removeError = $state("");
@@ -260,7 +259,7 @@
           <Button
             variant="outline"
             size="sm"
-            onclick={() => (showAddDialog = true)}
+            onclick={() => push("/models/new")}
           >
             <Plus class="size-3.5" />
             Add model
@@ -400,12 +399,6 @@
     {@render modelSection("Peer models", peerModels)}
   </div>
 </div>
-
-<AddModelDialog
-  open={showAddDialog}
-  onclose={() => (showAddDialog = false)}
-  onsaved={() => void fetchPlaygroundModels()}
-/>
 
 <Dialog.Root
   open={removeTarget !== null}

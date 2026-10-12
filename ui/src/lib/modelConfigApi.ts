@@ -1,21 +1,9 @@
-export interface ModelFileInfo {
-  flag: string;
-  path: string;
-}
-
 export interface ModelConfigInfo {
   model_id: string;
   source_file?: string;
   editable: boolean;
   reason?: string;
   yaml: string;
-  backend_path?: string;
-  model_files?: ModelFileInfo[];
-}
-
-export interface BackendInfo {
-  path: string;
-  models: string[];
 }
 
 export interface ListenerInfo {
@@ -163,11 +151,6 @@ export async function triggerReload(): Promise<{ status: string; reloading: bool
 // server (saved changes pending an apply).
 export async function fetchConfigStatus(): Promise<{ dirty: boolean }> {
   return requestJSON<{ dirty: boolean }>("/api/config/status");
-}
-
-export async function fetchBackends(): Promise<BackendInfo[]> {
-  const state = await requestJSON<{ backends: BackendInfo[] }>("/api/backends");
-  return state.backends ?? [];
 }
 
 export interface ListenersResponse {

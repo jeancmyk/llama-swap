@@ -287,68 +287,6 @@ func mustModelIDs(t *testing.T, cfg config.Config) []string {
 	return ids
 }
 
-func TestProxy_ConfigAPI_GetReturnsPaths(t *testing.T) {
-	dir := t.TempDir()
-	path := filepath.Join(dir, "config.yaml")
-	cfgText := `models:
-  vision:
-    cmd: |
-      /opt/llama-server --jinja --port ${PORT} -m "/mnt/models/x.gguf" --mmproj "/mnt/models/mm.gguf" --model-draft "/mnt/models/draft.gguf"
-`
-	require.NoError(t, os.WriteFile(path, []byte(cfgText), 0o644))
-
-	s := editTestServerRaw(t, cfgText, path)
-	w := httptest.NewRecorder()
-	s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/models/config/vision", nil))
-	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
-
-	var resp struct {
-		BackendPath string `json:"backend_path"`
-		ModelFiles  []struct {
-			Flag string `json:"flag"`
-			Path string `json:"path"`
-		} `json:"model_files"`
-	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	assert.Equal(t, "/opt/llama-server", resp.BackendPath)
-	require.Len(t, resp.ModelFiles, 3)
-	assert.Equal(t, "-m", resp.ModelFiles[0].Flag)
-	assert.Equal(t, "/mnt/models/x.gguf", resp.ModelFiles[0].Path)
-	assert.Equal(t, "--mmproj", resp.ModelFiles[1].Flag)
-	assert.Equal(t, "--model-draft", resp.ModelFiles[2].Flag)
-}
-
-func TestConfigEdit_ExtractCmdPaths_WindowsQuotedPaths(t *testing.T) {
-	// A Windows install path containing spaces must survive the tokenizer on
-	// both dialects: the double quotes hold the token together and backslashes
-	// stay literal inside double quotes under shlex.Windows and shlex.Posix
-	// alike, so the parsed paths are identical on every OS.
-	cmd := `"C:\Program Files\llama.cpp\llama-server.exe" --port ${PORT} -m "E:\LLM Models\m.gguf"`
-	backend, files := extractCmdPaths(cmd)
-	assert.Equal(t, `C:\Program Files\llama.cpp\llama-server.exe`, backend)
-	require.Len(t, files, 1)
-	assert.Equal(t, modelFileInfo{Flag: "-m", Path: `E:\LLM Models\m.gguf`}, files[0])
-}
-
-func TestProxy_ConfigAPI_BackendsListing(t *testing.T) {
-	s := editTestServer(t, "")
-	w := httptest.NewRecorder()
-	s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/backends", nil))
-	require.Equal(t, http.StatusOK, w.Code)
-
-	var resp struct {
-		Backends []struct {
-			Path   string   `json:"path"`
-			Models []string `json:"models"`
-		} `json:"backends"`
-	}
-	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
-	// both stub models run `echo <id>`, so the single unique backend is echo
-	require.Len(t, resp.Backends, 1)
-	assert.Equal(t, "echo", resp.Backends[0].Path)
-	assert.ElementsMatch(t, []string{"alpha", "beta"}, resp.Backends[0].Models)
-}
-
 func TestProxy_ConfigAPI_AddModel_LeavesListenersUntouched(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")

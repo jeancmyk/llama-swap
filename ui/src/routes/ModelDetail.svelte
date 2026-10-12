@@ -48,6 +48,13 @@
   // Loading progress the upstream reports through its health check while starting.
   let percent = $derived(loadingPercent(model));
   let message = $derived(loadingMessage(model));
+
+  // The Config tab edits a models: block; selector and profile records are
+  // virtual (their config lives in selectors:/profiles:) and peer models are
+  // owned by their instance, so editing does not apply to them.
+  let isPlainModel = $derived(
+    !!model && !model.peerID && (model.playgroundType === undefined || model.playgroundType === "model"),
+  );
 </script>
 
 <div class="flex h-full flex-col gap-4 overflow-y-auto p-2">
@@ -134,7 +141,9 @@
         <TabsTrigger value="activity">Activity</TabsTrigger>
         <TabsTrigger value="logs">Logs</TabsTrigger>
         <TabsTrigger value="details">Details</TabsTrigger>
-        <TabsTrigger value="config">Config</TabsTrigger>
+        {#if isPlainModel}
+          <TabsTrigger value="config">Config</TabsTrigger>
+        {/if}
       </TabsList>
 
       <!-- Activity -->
@@ -152,10 +161,12 @@
         <ModelDetailsTab model={model} />
       </TabsContent>
 
-      <!-- Config -->
-      <TabsContent value="config" class="min-h-0 flex-1">
-        <ModelConfigTab {model} />
-      </TabsContent>
+      {#if isPlainModel}
+        <!-- Config -->
+        <TabsContent value="config" class="min-h-0 flex-1">
+          <ModelConfigTab {model} />
+        </TabsContent>
+      {/if}
     </Tabs>
   {/if}
 </div>

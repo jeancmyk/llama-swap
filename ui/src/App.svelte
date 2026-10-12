@@ -38,6 +38,7 @@
     "/playground": AlwaysMountedStub,
     "/help": AlwaysMountedStub,
     "/models": wrap({ asyncComponent: () => import("./routes/ModelsDash.svelte"), loadingComponent: RouteLoading }),
+    "/models/new": wrap({ asyncComponent: () => import("./routes/NewModel.svelte"), loadingComponent: RouteLoading }),
     "/models/:id": wrap({ asyncComponent: () => import("./routes/ModelDetail.svelte"), loadingComponent: RouteLoading }),
     "/logs": wrap({ asyncComponent: () => import("./routes/LogViewer.svelte"), loadingComponent: RouteLoading }),
     "/activity": wrap({ asyncComponent: () => import("./routes/Activity.svelte"), loadingComponent: RouteLoading }),
@@ -54,6 +55,7 @@
     "/playground": "Playground",
     "/help": "Help",
     "/models": "Models",
+    "/models/new": "New model",
     "/activity": "Activity",
     "/logs": "Logs",
     "/settings": "Settings",
@@ -74,6 +76,9 @@
     if ($currentRoute === "/playground") {
       const tab = playgroundTabs.find((t) => t.id === $selectedPlaygroundTab);
       return `Playground / ${tab?.label ?? ""}`;
+    }
+    if ($currentRoute === "/models/new") {
+      return "New model";
     }
     if ($currentRoute.startsWith("/models/")) {
       const id = $currentRoute.slice("/models/".length);

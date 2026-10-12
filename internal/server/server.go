@@ -506,7 +506,6 @@ func (s *Server) routes() {
 	mux.Handle("DELETE /api/models/config/{model...}", apiChain.ThenFunc(s.handleAPIRemoveModelConfig))
 	mux.Handle("GET /api/listeners", apiChain.ThenFunc(s.handleAPIListeners))
 	mux.Handle("PUT /api/listeners", apiChain.ThenFunc(s.handleAPIPutListeners))
-	mux.Handle("GET /api/backends", apiChain.ThenFunc(s.handleAPIBackends))
 
 	// Capability write-back: review the fields discovery auto-filled. The
 	// wildcard captures the model id and the action as its last segment,
