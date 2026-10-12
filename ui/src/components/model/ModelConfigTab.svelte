@@ -476,22 +476,19 @@
             The highlighted editor is a bare <textarea>, not the shadcn
             Textarea: its base classes (text-base, md:text-sm) would fight
             the backdrop's, and the two text layers must share byte-identical
-            metrics. Soft-wrap (no wrap="off") so long lines wrap in both
-            layers at the same points.
+            metrics. Both layers soft-wrap and reserve the same scrollbar
+            gutter, and the textarea grows with its content (field-sizing), so
+            the two wrap at exactly the same columns.
           -->
           <div class="relative">
             <pre
               bind:this={backdropEl}
-              class="pointer-events-none absolute inset-0 m-0 select-none overflow-hidden whitespace-pre-wrap rounded-lg border border-input px-2.5 py-2 font-mono text-xs leading-5"
+              class="pointer-events-none absolute inset-0 m-0 select-none overflow-hidden scrollbar-gutter-stable whitespace-pre-wrap rounded-lg border border-input px-2.5 py-2 font-mono text-xs leading-5"
               aria-hidden="true"
-            >
-              {#each backdropLines as line, i (i)}
-                <span class={markerLineFlags[i] ? "bg-warning/25" : ""}>{line}</span>
-              {/each}
-            </pre>
+            >{#each backdropLines as line, i (i)}<span class={markerLineFlags[i] ? "bg-warning/25" : ""}>{line}</span>{/each}</pre>
             <textarea
               bind:this={editorEl}
-              class="relative z-10 block w-full min-h-[320px] resize-none whitespace-pre-wrap rounded-lg border border-input bg-transparent px-2.5 py-2 font-mono text-xs leading-5 outline-none"
+              class="field-sizing-content relative z-10 block min-h-[320px] w-full resize-none scrollbar-gutter-stable whitespace-pre-wrap rounded-lg border border-input bg-transparent px-2.5 py-2 font-mono text-xs leading-5 outline-none"
               bind:value={editedYaml}
               readonly={readOnly}
               spellcheck="false"
