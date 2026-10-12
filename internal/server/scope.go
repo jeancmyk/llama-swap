@@ -24,6 +24,19 @@ func (sc *ListenerScope) Allows(names ...string) bool {
 		return true
 	}
 	for _, pattern := range sc.Patterns {
+		// A bare "*" means every model. path.Match's "*" refuses to cross
+		// "/", which would 404 slash-containing model IDs (vendor/model
+		// style) even on the default allow-all listener, so match-all is
+		// special-cased here. Every other glob keeps path.Match semantics:
+		// matching a whole namespace takes an explicit "vendor/*".
+		if pattern == "*" {
+			for _, name := range names {
+				if name != "" {
+					return true
+				}
+			}
+			continue
+		}
 		for _, name := range names {
 			if name == "" {
 				continue

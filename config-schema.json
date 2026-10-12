@@ -848,7 +848,7 @@
                             "minLength": 1
                         },
                         "minItems": 1,
-                        "description": "Shell-style glob patterns (path.Match) matched against local model IDs, aliases, selector IDs and peer FQNs (\"peer:model\"). Only models matching at least one pattern are served on this port; unmatched requests are rejected with 404."
+                        "description": "Shell-style glob patterns (path.Match) matched against local model IDs, aliases, selector IDs and peer FQNs (\"peer:model\"). Only models matching at least one pattern are served on this port; unmatched requests are rejected with 404. A bare \"*\" matches every model, including IDs containing \"/\"; other globs do not cross \"/\", so a whole namespace needs \"vendor/*\"."
                     }
                 },
                 "required": [

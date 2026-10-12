@@ -69,3 +69,24 @@ func TestScope_DispatchRejectedForForeignModels(t *testing.T) {
 	rejected := handler("beta")
 	assert.Equal(t, http.StatusNotFound, rejected.Code)
 }
+
+func TestScope_BareStarMatchesSlashIDs(t *testing.T) {
+	// The default listener is attached with a bare "*": slash-containing
+	// IDs (vendor/model style, or any alias containing "/") must still be
+	// allowed on it, unlike path.Match's default "*" behavior.
+	all := &ListenerScope{Name: "default", Listen: "127.0.0.1:8080", Patterns: []string{"*"}}
+	assert.True(t, all.Allows("qwen3"))
+	assert.True(t, all.Allows("vendor/model"))
+	assert.True(t, all.Allows("peer1:qwen3"))
+	assert.False(t, all.Allows(""))
+
+	// Other globs keep path.Match semantics: a "*" inside a pattern never
+	// crosses "/", so a whole vendor namespace needs "vendor/*".
+	vendor := &ListenerScope{Name: "v", Listen: ":1", Patterns: []string{"vendor/*"}}
+	assert.True(t, vendor.Allows("vendor/model"))
+	assert.False(t, vendor.Allows("other/model"))
+
+	flat := &ListenerScope{Name: "f", Listen: ":1", Patterns: []string{"qwen*"}}
+	assert.True(t, flat.Allows("qwen3"))
+	assert.False(t, flat.Allows("vendor/qwen3"))
+}

@@ -10,7 +10,9 @@ import (
 
 // ListenerConfig declares one HTTP listener and which models it serves.
 // Patterns are shell-style globs (path.Match) matched against local model
-// IDs, aliases, selector IDs, and peer FQNs ("peer:model").
+// IDs, aliases, selector IDs, and peer FQNs ("peer:model"). A bare "*" is
+// special-cased to mean every model, including IDs containing "/"; other
+// globs do not cross "/" (matching a namespace takes "vendor/*").
 type ListenerConfig struct {
 	Name   string   `yaml:"name" json:"name"`
 	Listen string   `yaml:"listen" json:"listen"`
