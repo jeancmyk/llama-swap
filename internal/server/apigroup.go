@@ -44,6 +44,9 @@ type apiModel struct {
 	// LoadingMessage is the loading step the upstream last reported. Only set
 	// while the model is starting.
 	LoadingMessage string `json:"loadingMessage,omitempty"`
+	// MissingFiles lists file arguments from the model's cmd that do not
+	// exist on disk (startup scan). Non-empty only for local models.
+	MissingFiles []modelFileInfo `json:"missing_files,omitempty"`
 }
 
 type apiProfile struct {
@@ -145,6 +148,10 @@ func (s *Server) modelStatus() []apiModel {
 		// event callbacks that have no request of their own.
 		caps := s.resolveCapabilities(s.shutdownCtx, id, mc)
 		_, capsMap, _, ctxLen := renderCapabilities(caps)
+		missing := s.missingFiles[id]
+		if len(missing) > 0 {
+			missing = append([]modelFileInfo(nil), missing...)
+		}
 		models = append(models, apiModel{
 			Id:              id,
 			Name:            mc.Name,
@@ -158,6 +165,7 @@ func (s *Server) modelStatus() []apiModel {
 			UptimeMs:        uptimeMs,
 			LoadingProgress: loading.Progress,
 			LoadingMessage:  loading.Message,
+			MissingFiles:    missing,
 		})
 	}
 

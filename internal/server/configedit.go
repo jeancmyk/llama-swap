@@ -34,8 +34,8 @@ type modelConfigResponse struct {
 	// the file arguments (main gguf, mmproj, drafts) parsed from the
 	// effective (macro-expanded) command. Both power the read-only Paths
 	// panel in the UI.
-	BackendPath string           `json:"backend_path,omitempty"`
-	ModelFiles  []modelFileInfo  `json:"model_files,omitempty"`
+	BackendPath string          `json:"backend_path,omitempty"`
+	ModelFiles  []modelFileInfo `json:"model_files,omitempty"`
 }
 
 type modelFileInfo struct {
@@ -74,6 +74,11 @@ func extractCmdPaths(cmd string) (string, []modelFileInfo) {
 
 type modelConfigRequest struct {
 	YAML string `json:"yaml"`
+}
+
+// modelNameRequest is the payload of PATCH /api/models/config/{model}.
+type modelNameRequest struct {
+	Name string `json:"name"`
 }
 
 // handleAPIGetModelConfig returns the raw YAML block for a local model from
@@ -195,6 +200,89 @@ func (s *Server) handleAPIPutModelConfig(w http.ResponseWriter, r *http.Request)
 	})
 }
 
+// handleAPIPatchModelConfig sets the display `name` of models.<modelID> in
+// the primary config file and triggers a hot reload. An empty name clears the
+// field. Unlike the full-block PUT, this patch keeps every other setting and
+// comment in the model block byte-identical.
+func (s *Server) handleAPIPatchModelConfig(w http.ResponseWriter, r *http.Request) {
+	modelID := r.PathValue("model")
+
+	var req modelNameRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		swaputil.SendResponse(w, r, http.StatusBadRequest, `request body must be JSON: {"name": "new display name"}`)
+		return
+	}
+	name := strings.TrimSpace(req.Name)
+	if len(name) > 200 {
+		swaputil.SendResponse(w, r, http.StatusBadRequest, "name is too long (max 200 characters)")
+		return
+	}
+
+	if _, ok := s.cfg.Models[modelID]; !ok {
+		swaputil.SendResponse(w, r, http.StatusNotFound, fmt.Sprintf("model %q not found", modelID))
+		return
+	}
+	if s.configFile == "" {
+		swaputil.SendResponse(w, r, http.StatusConflict, "config editing is not available: no primary config file")
+		return
+	}
+
+	s.editMu.Lock()
+	defer s.editMu.Unlock()
+
+	data, err := os.ReadFile(s.configFile)
+	if err != nil {
+		swaputil.SendResponse(w, r, http.StatusInternalServerError, fmt.Sprintf("read config: %v", err))
+		return
+	}
+
+	patched, err := config.SetModelNameYAML(data, modelID, name)
+	if errors.Is(err, config.ErrModelNotInFile) {
+		swaputil.SendResponse(w, r, http.StatusConflict,
+			fmt.Sprintf("model %q is defined outside the primary config file and cannot be edited here", modelID))
+		return
+	}
+	if err != nil {
+		swaputil.SendResponse(w, r, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	newCfg, err := config.LoadConfigFromReader(bytes.NewReader(patched))
+	if err != nil {
+		swaputil.SendResponse(w, r, http.StatusBadRequest, fmt.Sprintf("patched config is invalid: %v", err))
+		return
+	}
+	newMC, ok := newCfg.Models[modelID]
+	if !ok {
+		swaputil.SendResponse(w, r, http.StatusBadRequest, "patched config lost the model being edited")
+		return
+	}
+	if newMC.Name != name {
+		swaputil.SendResponse(w, r, http.StatusInternalServerError, "patched config does not contain the requested name")
+		return
+	}
+
+	if err := config.WriteFileAtomic(s.configFile, patched); err != nil {
+		swaputil.SendResponse(w, r, http.StatusInternalServerError, fmt.Sprintf("write config: %v", err))
+		return
+	}
+
+	s.logs.ProxyLogs.Infof("name for model %q updated to %q via UI, triggering reload", modelID, name)
+
+	reloaded := false
+	if s.reloadFn != nil {
+		go s.reloadFn()
+		reloaded = true
+	}
+
+	swaputil.RespondJSON(w, r, http.StatusOK, map[string]any{
+		"status":    "ok",
+		"model_id":  modelID,
+		"name":      name,
+		"reloading": reloaded,
+	})
+}
+
 // marshalModelConfigFallback renders an effective ModelConfig as YAML for
 // read-only display when the raw block cannot be extracted.
 func marshalModelConfigFallback(mc config.ModelConfig) string {
@@ -284,7 +372,7 @@ func (s *Server) handleAPIAddModelConfig(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	s.proxylog.Infof("model %q added via UI, triggering reload", modelID)
+	s.logs.ProxyLogs.Infof("model %q added via UI, triggering reload", modelID)
 
 	reloaded := false
 	if s.reloadFn != nil {
@@ -356,7 +444,7 @@ func (s *Server) handleAPIRemoveModelConfig(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	s.proxylog.Infof("model %q removed via UI (listeners pruned: %v), triggering reload", modelID, listenersPruned)
+	s.logs.ProxyLogs.Infof("model %q removed via UI (listeners pruned: %v), triggering reload", modelID, listenersPruned)
 
 	reloaded := false
 	if s.reloadFn != nil {

@@ -87,6 +87,11 @@ type Server struct {
 
 	// listenerStatus reports runtime bind state of HTTP listeners for the API.
 	listenerStatus func() []ListenerRuntimeStatus
+
+	// missingFiles maps model IDs to file arguments (parsed from their cmd)
+	// that do not exist on disk, from the scan at startup/reload. Models in
+	// here are flagged in the UI and excluded from the /v1/models listing.
+	missingFiles map[string][]modelFileInfo
 }
 
 func (s *Server) SetTailcatAddress(address string) {
@@ -300,6 +305,12 @@ func New(cfg config.Config, logs *logmon.Group, perfMon *perf.Monitor, st store.
 	s.tools = tools
 
 	s.routes()
+
+	// Scan model file arguments so broken entries can be flagged in the UI
+	// and kept off the API listing.
+	s.missingFiles = scanModelFiles(cfg.Models)
+	s.warnMissingFiles()
+
 	s.startPreload()
 	return s, nil
 }
@@ -470,6 +481,7 @@ func (s *Server) routes() {
 	// Config editing (feature: UI model config editor + listener management).
 	mux.Handle("GET /api/models/config/{model...}", apiChain.ThenFunc(s.handleAPIGetModelConfig))
 	mux.Handle("PUT /api/models/config/{model...}", apiChain.ThenFunc(s.handleAPIPutModelConfig))
+	mux.Handle("PATCH /api/models/config/{model...}", apiChain.ThenFunc(s.handleAPIPatchModelConfig))
 	mux.Handle("POST /api/models/config/{model...}", apiChain.ThenFunc(s.handleAPIAddModelConfig))
 	mux.Handle("DELETE /api/models/config/{model...}", apiChain.ThenFunc(s.handleAPIRemoveModelConfig))
 	mux.Handle("GET /api/listeners", apiChain.ThenFunc(s.handleAPIListeners))

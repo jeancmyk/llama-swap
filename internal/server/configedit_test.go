@@ -401,3 +401,94 @@ func TestProxy_ConfigAPI_RemoveModel_PrunesExactListenerEntries(t *testing.T) {
 	s.ServeHTTP(w, httptest.NewRequest(http.MethodDelete, "/api/models/config/beta", nil))
 	assert.Equal(t, http.StatusNotFound, w.Code)
 }
+
+func TestProxy_ConfigAPI_PatchModelName(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(editTestConfig), 0o644))
+
+	s := editTestServer(t, path)
+
+	req := httptest.NewRequest(http.MethodPatch, "/api/models/config/alpha", strings.NewReader(`{"name": "Alpha Display"}`))
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	// the rest of the model block survives the patch
+	onDisk, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Contains(t, string(onDisk), "name: Alpha Display")
+	assert.Contains(t, string(onDisk), "echo alpha ${PORT}")
+	assert.Contains(t, string(onDisk), "ttl: 300")
+	assert.Contains(t, string(onDisk), "echo beta ${PORT}")
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "ok", resp["status"])
+	assert.Equal(t, "Alpha Display", resp["name"])
+
+	// reload runs asynchronously; wait for the server config to pick it up
+	require.Eventually(t, func() bool {
+		return s.cfg.Models["alpha"].Name == "Alpha Display"
+	}, 2*time.Second, 10*time.Millisecond)
+
+	// rename again over an existing name replaces it
+	req = httptest.NewRequest(http.MethodPatch, "/api/models/config/alpha", strings.NewReader(`{"name": "Renamed Again"}`))
+	w = httptest.NewRecorder()
+	s.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	onDisk, err = os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Contains(t, string(onDisk), "name: Renamed Again")
+	assert.NotContains(t, string(onDisk), "Alpha Display")
+}
+
+func TestProxy_ConfigAPI_PatchModelName_Clears(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	cfgText := "models:\n  alpha:\n    cmd: echo alpha ${PORT}\n    name: Old\n"
+	require.NoError(t, os.WriteFile(path, []byte(cfgText), 0o644))
+
+	s := editTestServerRaw(t, cfgText, path)
+
+	req := httptest.NewRequest(http.MethodPatch, "/api/models/config/alpha", strings.NewReader(`{"name": ""}`))
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	onDisk, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.NotContains(t, string(onDisk), "name:")
+	assert.Contains(t, string(onDisk), "echo alpha ${PORT}")
+}
+
+func TestProxy_ConfigAPI_PatchModelName_Errors(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(editTestConfig), 0o644))
+
+	s := editTestServer(t, path)
+
+	// unknown model
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, httptest.NewRequest(http.MethodPatch, "/api/models/config/nope", strings.NewReader(`{"name": "x"}`)))
+	assert.Equal(t, http.StatusNotFound, w.Code)
+
+	// bad JSON body
+	w = httptest.NewRecorder()
+	s.ServeHTTP(w, httptest.NewRequest(http.MethodPatch, "/api/models/config/alpha", strings.NewReader(`not json`)))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+
+	// no config file configured
+	sNoFile := editTestServer(t, "")
+	w = httptest.NewRecorder()
+	sNoFile.ServeHTTP(w, httptest.NewRequest(http.MethodPatch, "/api/models/config/alpha", strings.NewReader(`{"name": "x"}`)))
+	assert.Equal(t, http.StatusConflict, w.Code)
+
+	// on-disk file untouched by failures
+	onDisk, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Contains(t, string(onDisk), "echo alpha ${PORT}")
+	assert.NotContains(t, string(onDisk), "name:")
+}

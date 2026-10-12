@@ -99,6 +99,74 @@ func TestWriteback_PatchModelYAML_RejectsBadReplacement(t *testing.T) {
 	require.Error(t, err)
 }
 
+func TestWriteback_SetModelNameYAML(t *testing.T) {
+	patched, err := SetModelNameYAML([]byte(writebackTestConfig), "beta", "Beta Two")
+	require.NoError(t, err)
+	out := string(patched)
+
+	// untouched parts survive
+	assert.Contains(t, out, "# top comment")
+	assert.Contains(t, out, "# section banner for alpha")
+	assert.Contains(t, out, "alpha-server")
+	assert.Contains(t, out, `note: "keep me"`)
+	assert.Contains(t, out, `beta: # inline beta comment`)
+	assert.Contains(t, out, "aliases: [b2]")
+
+	// name applied
+	assert.Contains(t, out, "name: Beta Two")
+
+	cfg, err := LoadConfigFromReader(strings.NewReader(out))
+	require.NoError(t, err)
+	assert.Equal(t, "Beta Two", cfg.Models["beta"].Name)
+	assert.Empty(t, cfg.Models["alpha"].Name)
+	assert.Equal(t, 300, cfg.Models["alpha"].UnloadAfter)
+}
+
+func TestWriteback_SetModelNameYAML_ReplacesExisting(t *testing.T) {
+	cfgText := `models:
+  alpha:
+    cmd: echo alpha ${PORT}
+    name: Old Name
+    ttl: 42
+`
+	patched, err := SetModelNameYAML([]byte(cfgText), "alpha", "New Name")
+	require.NoError(t, err)
+	out := string(patched)
+
+	assert.Contains(t, out, "name: New Name")
+	assert.NotContains(t, out, "Old Name")
+	// sibling settings and ordering preserved
+	assert.Contains(t, out, "ttl: 42")
+
+	cfg, err := LoadConfigFromReader(strings.NewReader(out))
+	require.NoError(t, err)
+	assert.Equal(t, "New Name", cfg.Models["alpha"].Name)
+	assert.Equal(t, 42, cfg.Models["alpha"].UnloadAfter)
+}
+
+func TestWriteback_SetModelNameYAML_ClearRemovesKey(t *testing.T) {
+	cfgText := "models:\n  alpha:\n    cmd: echo alpha ${PORT}\n    name: Old Name\n    ttl: 42\n"
+	patched, err := SetModelNameYAML([]byte(cfgText), "alpha", "")
+	require.NoError(t, err)
+
+	assert.NotContains(t, string(patched), "name:")
+
+	cfg, err := LoadConfigFromReader(strings.NewReader(string(patched)))
+	require.NoError(t, err)
+	assert.Empty(t, cfg.Models["alpha"].Name)
+	assert.Equal(t, 42, cfg.Models["alpha"].UnloadAfter)
+}
+
+func TestWriteback_SetModelNameYAML_Errors(t *testing.T) {
+	_, err := SetModelNameYAML([]byte(writebackTestConfig), "missing", "x")
+	assert.ErrorIs(t, err, ErrModelNotInFile)
+
+	// non-mapping model block cannot carry a name key
+	cfgText := "models:\n  alpha: just a scalar\n"
+	_, err = SetModelNameYAML([]byte(cfgText), "alpha", "x")
+	require.Error(t, err)
+}
+
 func TestWriteback_PatchTopLevelKey_SetAndRemove(t *testing.T) {
 	listeners := []ListenerConfig{
 		{Name: "roleplay", Listen: "127.0.0.1:8091", Models: []string{"beta", "g*"}},
