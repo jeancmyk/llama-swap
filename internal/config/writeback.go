@@ -136,6 +136,57 @@ func PatchModelYAML(data []byte, modelID, replacement string) ([]byte, error) {
 	return encodeNode(doc)
 }
 
+// SetModelNameYAML sets (or clears with an empty string) the `name` field
+// of models.<modelID> in data and returns the patched document bytes.
+// Everything else in the document — comments, ordering, scalar styles — is
+// preserved because only the single name value node is swapped in place.
+// Returns ErrModelNotInFile when the model ID does not exist in this
+// document.
+func SetModelNameYAML(data []byte, modelID, name string) ([]byte, error) {
+	doc, err := yamlNodeRoundTrip(data)
+	if err != nil {
+		return nil, err
+	}
+	models, err := findModelsMapping(doc)
+	if err != nil {
+		return nil, err
+	}
+	_, val, _, found := findModelEntry(models, modelID)
+	if !found {
+		return nil, ErrModelNotInFile
+	}
+	if val.Kind != yaml.MappingNode {
+		return nil, fmt.Errorf("model %q is not a mapping of settings", modelID)
+	}
+
+	if name == "" {
+		// clearing: drop the name key entirely so no stale value remains
+		for i := 0; i+1 < len(val.Content); i += 2 {
+			if val.Content[i].Value == "name" {
+				val.Content = append(val.Content[:i], val.Content[i+2:]...)
+				break
+			}
+		}
+	} else {
+		nameNode := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: name}
+		replaced := false
+		for i := 0; i+1 < len(val.Content); i += 2 {
+			if val.Content[i].Value == "name" {
+				// keep the key node (with its comments); swap only the value
+				val.Content[i+1] = nameNode
+				replaced = true
+				break
+			}
+		}
+		if !replaced {
+			keyNode := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "name"}
+			val.Content = append(val.Content, keyNode, nameNode)
+		}
+	}
+
+	return encodeNode(doc)
+}
+
 // RemoveModelYAML deletes the models.<modelID> entry from data and returns
 // the patched document bytes. Returns ErrModelNotInFile when the model ID
 // does not exist in this document.

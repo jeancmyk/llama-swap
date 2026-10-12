@@ -56,6 +56,20 @@ export async function updateModelConfig(modelId: string, yaml: string): Promise<
   );
 }
 
+export async function renameModel(
+  modelId: string,
+  name: string,
+): Promise<{ status: string; reloading: boolean }> {
+  return requestJSON<{ status: string; reloading: boolean }>(
+    `/api/models/config/${encodeURIComponent(modelId)}`,
+    {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name }),
+    },
+  );
+}
+
 export async function addModelConfig(
   modelId: string,
   yaml: string,
