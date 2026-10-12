@@ -322,6 +322,46 @@ func TestProxy_ConfigAPI_AddModel_LeavesListenersUntouched(t *testing.T) {
 	assert.Equal(t, http.StatusConflict, w.Code)
 }
 
+func TestProxy_ConfigAPI_PutModelOutsideFile_Conflict(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	// The running config knows "alpha" (e.g. it came from -config-dir) but
+	// the primary file does not contain it: PUT must 409 like the other
+	// mutations instead of appending a block that the dir copy outvotes.
+	fileText := "healthCheckTimeout: 120\n\nmodels:\n  beta:\n    cmd: echo beta ${PORT}\n"
+	require.NoError(t, os.WriteFile(path, []byte(fileText), 0o644))
+
+	s := editTestServerRaw(t, editTestConfig, path)
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPut, "/api/models/config/alpha",
+		strings.NewReader(`{"yaml": "cmd: echo alpha ${PORT}\n"}`))
+	req.Header.Set("Content-Type", "application/json")
+	s.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusConflict, w.Code, w.Body.String())
+
+	onDisk, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Equal(t, fileText, string(onDisk), "failed PUT must not touch the file")
+}
+
+func TestProxy_ConfigAPI_AddModel_DuplicateInFile(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	// "delta" exists only in the file (e.g. added by a save that has not
+	// been applied yet): a second add must 409 instead of appending a
+	// second block for the same ID.
+	fileText := "models:\n  delta:\n    cmd: echo delta ${PORT}\n"
+	require.NoError(t, os.WriteFile(path, []byte(fileText), 0o644))
+
+	s := editTestServerRaw(t, editTestConfig, path)
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/api/models/config/delta",
+		strings.NewReader(`{"yaml": "cmd: echo delta2 ${PORT}\n"}`))
+	req.Header.Set("Content-Type", "application/json")
+	s.ServeHTTP(w, req)
+	assert.Equal(t, http.StatusConflict, w.Code, w.Body.String())
+}
+
 func TestProxy_ConfigAPI_RemoveModel_PrunesExactListenerEntries(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")

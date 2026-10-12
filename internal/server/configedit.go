@@ -115,10 +115,6 @@ func (s *Server) handleAPIPutModelConfig(w http.ResponseWriter, r *http.Request)
 		swaputil.SendResponse(w, r, http.StatusConflict, "config editing is not available: no primary config file")
 		return
 	}
-	if !strings.ContainsAny(modelID, "/") && strings.Contains(modelID, "/") { // unreachable guard kept simple
-		swaputil.SendResponse(w, r, http.StatusBadRequest, "invalid model id")
-		return
-	}
 
 	s.editMu.Lock()
 	defer s.editMu.Unlock()
@@ -126,6 +122,16 @@ func (s *Server) handleAPIPutModelConfig(w http.ResponseWriter, r *http.Request)
 	data, err := os.ReadFile(s.configFile)
 	if err != nil {
 		swaputil.SendResponse(w, r, http.StatusInternalServerError, fmt.Sprintf("read config: %v", err))
+		return
+	}
+
+	// A model defined only in a -config-dir file cannot be edited here:
+	// appending its block to the primary file would not take effect (the dir
+	// copy wins on merge) and would leave a duplicate behind, so 409 like the
+	// other mutation endpoints.
+	if _, err := config.ExtractModelYAML(data, modelID); errors.Is(err, config.ErrModelNotInFile) {
+		swaputil.SendResponse(w, r, http.StatusConflict,
+			fmt.Sprintf("model %q is defined outside the primary config file and cannot be edited here", modelID))
 		return
 	}
 
@@ -392,6 +398,15 @@ func (s *Server) handleAPIAddModelConfig(w http.ResponseWriter, r *http.Request)
 	data, err := os.ReadFile(s.configFile)
 	if err != nil {
 		swaputil.SendResponse(w, r, http.StatusInternalServerError, fmt.Sprintf("read config: %v", err))
+		return
+	}
+
+	// The in-memory check above still misses a model added by a save-only
+	// write that has not been applied yet; also reject when the block is
+	// already present in the file.
+	if existing, err := config.ExtractModelYAML(data, modelID); err == nil && existing != "" {
+		swaputil.SendResponse(w, r, http.StatusConflict,
+			fmt.Sprintf("model %q already exists in the config file", modelID))
 		return
 	}
 
