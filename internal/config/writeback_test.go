@@ -196,6 +196,130 @@ func TestWriteback_PatchTopLevelKey_SetAndRemove(t *testing.T) {
 	assert.False(t, changed)
 }
 
+// renameTestConfig exercises every reference site RenameModelYAML must
+// rewrite, plus every site it must leave alone (globs, comments, cmd
+// strings, peer model lists, other models' aliases).
+const renameTestConfig = `# top comment
+healthCheckTimeout: 120
+
+models:
+  # section banner for old-name
+  old-name:
+    cmd: |
+      /usr/bin/old-name-server --port ${PORT} -m "old-name.gguf"
+    ttl: 300
+    aliases: [old-alias]
+  beta:
+    cmd: echo beta ${PORT}
+    aliases: [old-name, keep-me]
+
+listeners:
+  - name: scoped
+    listen: 127.0.0.1:8091
+    models: [old-name, keep*, other]
+
+selectors:
+  sel1:
+    strategy: warm
+    targets: [old-name]
+
+profiles:
+  p1:
+    pins:
+      alpha: old-name
+      old-name: beta
+
+hooks:
+  on_startup:
+    preload: [old-name]
+
+routing:
+  router:
+    use: matrix
+    settings:
+      matrix:
+        vars:
+          v1: old-name
+        evict_costs:
+          old-name: 5
+          v1: 2
+        sets:
+          main: "old-name | beta"
+
+peers:
+  remote:
+    proxy: http://10.0.0.2:8080
+    models: [old-name]
+`
+
+func TestWriteback_RenameModelYAML_RenamesKeyAndReferences(t *testing.T) {
+	patched, err := RenameModelYAML([]byte(renameTestConfig), "old-name", "new-name")
+	require.NoError(t, err)
+	out := string(patched)
+
+	// still loads and the ID moved
+	cfg, err := LoadConfigFromReader(strings.NewReader(out))
+	require.NoError(t, err)
+	require.Contains(t, cfg.Models, "new-name")
+	require.NotContains(t, cfg.Models, "old-name")
+	assert.Equal(t, []string{"old-alias"}, cfg.Models["new-name"].Aliases)
+	assert.Equal(t, 300, cfg.Models["new-name"].UnloadAfter)
+
+	// references rewritten
+	assert.Equal(t, []string{"new-name", "keep*", "other"}, cfg.Listeners[0].Models)
+	assert.Equal(t, []string{"new-name"}, cfg.Selectors["sel1"].Targets)
+	assert.Equal(t, "new-name", cfg.Profiles["p1"].Pins["alpha"])
+	assert.Equal(t, "beta", cfg.Profiles["p1"].Pins["new-name"])
+	assert.Equal(t, []string{"new-name"}, cfg.Hooks.OnStartup.Preload)
+	matrix := cfg.Routing.Router.Settings.Matrix
+	require.NotNil(t, matrix)
+	assert.Equal(t, "new-name", matrix.Var["v1"])
+	assert.Equal(t, "new-name | beta", matrix.Sets[0].DSL)
+
+	// untouched: comments, cmd strings, globs, peer models, other aliases
+	assert.Contains(t, out, "# top comment")
+	assert.Contains(t, out, "# section banner for old-name")
+	assert.Contains(t, out, "/usr/bin/old-name-server")
+	assert.Contains(t, out, `"old-name.gguf"`)
+	assert.Equal(t, []string{"old-name", "keep-me"}, cfg.Models["beta"].Aliases)
+	assert.Equal(t, []string{"old-name"}, cfg.Peers["remote"].Models)
+	assert.Contains(t, out, "new-name: 5")
+}
+
+func TestWriteback_RenameModelYAML_LegacyTopLevelGroups(t *testing.T) {
+	cfgText := "models:\n" +
+		"  old-name:\n    cmd: echo old-name ${PORT}\n" +
+		"  beta:\n    cmd: echo beta ${PORT}\n\n" +
+		"groups:\n  g1:\n    members: [old-name, beta]\n"
+
+	patched, err := RenameModelYAML([]byte(cfgText), "old-name", "new-name")
+	require.NoError(t, err)
+
+	cfg, err := LoadConfigFromReader(strings.NewReader(string(patched)))
+	require.NoError(t, err)
+	require.Contains(t, cfg.Models, "new-name")
+	assert.Equal(t, []string{"new-name", "beta"}, cfg.Groups["g1"].Members)
+}
+
+func TestWriteback_RenameModelYAML_Errors(t *testing.T) {
+	_, err := RenameModelYAML([]byte(writebackTestConfig), "missing", "x")
+	assert.ErrorIs(t, err, ErrModelNotInFile)
+
+	_, err = RenameModelYAML([]byte(writebackTestConfig), "alpha", "alpha")
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "same as the current model ID")
+}
+
+func TestWriteback_replaceDSLIdentifier(t *testing.T) {
+	assert.Equal(t, "new | b", replaceDSLIdentifier("a | b", "a", "new"))
+	assert.Equal(t, "new | new", replaceDSLIdentifier("a | a", "a", "new"))
+	// whole tokens only: "ab" and "a-b" must survive a rename of "a"
+	assert.Equal(t, "ab | a-b", replaceDSLIdentifier("ab | a-b", "a", "new"))
+	assert.Equal(t, "b | c", replaceDSLIdentifier("a | c", "a", "b"))
+	// namespaced refs are a different token and never match
+	assert.Equal(t, "a & +auto:orphans", replaceDSLIdentifier("a & +auto:orphans", "b", "new"))
+}
+
 func TestWriteback_WriteFileAtomic_BackupAndContent(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.yaml")

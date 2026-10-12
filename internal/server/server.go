@@ -479,6 +479,7 @@ func (s *Server) routes() {
 	mux.Handle("/api/mcp", apiChain.ThenFunc(s.handleAPIMCP))
 
 	// Config editing (feature: UI model config editor + listener management).
+	mux.Handle("POST /api/models/rename/{model...}", apiChain.ThenFunc(s.handleAPIRenameModel))
 	mux.Handle("GET /api/models/config/{model...}", apiChain.ThenFunc(s.handleAPIGetModelConfig))
 	mux.Handle("PUT /api/models/config/{model...}", apiChain.ThenFunc(s.handleAPIPutModelConfig))
 	mux.Handle("PATCH /api/models/config/{model...}", apiChain.ThenFunc(s.handleAPIPatchModelConfig))

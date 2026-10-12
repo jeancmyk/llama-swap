@@ -70,6 +70,25 @@ export async function renameModel(
   );
 }
 
+// renameModelId renames the model's ID (the models: key), which is the model's
+// identity everywhere: its URL, the /v1/models id and the UI links. The
+// server rewrites exact references (listeners, groups, selectors, profiles,
+// preloads, matrix) and hot-reloads, so a running model restarts under the
+// new ID.
+export async function renameModelId(
+  modelId: string,
+  newId: string,
+): Promise<{ status: string; new_id: string; reloading: boolean }> {
+  return requestJSON<{ status: string; new_id: string; reloading: boolean }>(
+    `/api/models/rename/${encodeURIComponent(modelId)}`,
+    {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ new_id: newId }),
+    },
+  );
+}
+
 export async function addModelConfig(
   modelId: string,
   yaml: string,

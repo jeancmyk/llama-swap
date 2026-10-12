@@ -492,3 +492,114 @@ func TestProxy_ConfigAPI_PatchModelName_Errors(t *testing.T) {
 	assert.Contains(t, string(onDisk), "echo alpha ${PORT}")
 	assert.NotContains(t, string(onDisk), "name:")
 }
+
+const renameTestConfig = `# header comment
+models:
+  alpha:
+    cmd: echo alpha ${PORT}
+    ttl: 300
+  beta:
+    cmd: echo beta ${PORT}
+listeners:
+  - name: roleplay
+    listen: 127.0.0.1:8092
+    models:
+      - alpha
+      - be*
+`
+
+func TestProxy_ConfigAPI_RenameModel(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(renameTestConfig), 0o644))
+
+	s := editTestServerRaw(t, renameTestConfig, path)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/models/rename/alpha", strings.NewReader(`{"new_id": "gamma"}`))
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, req)
+	require.Equal(t, http.StatusOK, w.Code, w.Body.String())
+
+	var resp map[string]any
+	require.NoError(t, json.Unmarshal(w.Body.Bytes(), &resp))
+	assert.Equal(t, "ok", resp["status"])
+	assert.Equal(t, "alpha", resp["model_id"])
+	assert.Equal(t, "gamma", resp["new_id"])
+
+	// the config file was rewritten: key and exact listener reference
+	onDisk, err := os.ReadFile(path)
+	require.NoError(t, err)
+	out := string(onDisk)
+	assert.Contains(t, out, "# header comment")
+	assert.Contains(t, out, "gamma:")
+	assert.NotContains(t, out, "alpha:")
+	assert.Contains(t, out, "- gamma")
+	assert.Contains(t, out, "- be*") // glob untouched
+	assert.Contains(t, out, "echo beta ${PORT}")
+
+	// the reload picks up the new ID and drops the old one
+	require.Eventually(t, func() bool {
+		_, okNew := s.cfg.Models["gamma"]
+		_, okOld := s.cfg.Models["alpha"]
+		return okNew && !okOld
+	}, 2*time.Second, 10*time.Millisecond)
+
+	// the old ID is gone from the API, the new one serves its block
+	w = httptest.NewRecorder()
+	s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/models/config/alpha", nil))
+	assert.Equal(t, http.StatusNotFound, w.Code)
+
+	w = httptest.NewRecorder()
+	s.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/models/config/gamma", nil))
+	assert.Equal(t, http.StatusOK, w.Code)
+}
+
+func TestProxy_ConfigAPI_RenameModel_Errors(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+	require.NoError(t, os.WriteFile(path, []byte(renameTestConfig), 0o644))
+
+	s := editTestServerRaw(t, renameTestConfig, path)
+
+	// unknown model
+	w := httptest.NewRecorder()
+	s.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/models/rename/nope", strings.NewReader(`{"new_id": "x"}`)))
+	assert.Equal(t, http.StatusNotFound, w.Code)
+
+	// empty new id
+	w = httptest.NewRecorder()
+	s.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/models/rename/alpha", strings.NewReader(`{"new_id": "  "}`)))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+
+	// no-op rename
+	w = httptest.NewRecorder()
+	s.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/models/rename/alpha", strings.NewReader(`{"new_id": "alpha"}`)))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+
+	// invalid characters (model IDs become URL path segments)
+	w = httptest.NewRecorder()
+	s.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/models/rename/alpha", strings.NewReader(`{"new_id": "has space"}`)))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+
+	// collides with an existing model
+	w = httptest.NewRecorder()
+	s.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/models/rename/alpha", strings.NewReader(`{"new_id": "beta"}`)))
+	assert.Equal(t, http.StatusConflict, w.Code)
+
+	// bad JSON body
+	w = httptest.NewRecorder()
+	s.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/models/rename/alpha", strings.NewReader(`not json`)))
+	assert.Equal(t, http.StatusBadRequest, w.Code)
+
+	// no config file configured
+	sNoFile := editTestServerRaw(t, renameTestConfig, "")
+	w = httptest.NewRecorder()
+	sNoFile.ServeHTTP(w, httptest.NewRequest(http.MethodPost, "/api/models/rename/alpha", strings.NewReader(`{"new_id": "gamma"}`)))
+	assert.Equal(t, http.StatusConflict, w.Code)
+
+	// on-disk file untouched by failures
+	onDisk, err := os.ReadFile(path)
+	require.NoError(t, err)
+	assert.Contains(t, string(onDisk), "alpha:")
+	assert.NotContains(t, string(onDisk), "gamma")
+}

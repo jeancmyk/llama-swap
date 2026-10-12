@@ -283,6 +283,114 @@ func (s *Server) handleAPIPatchModelConfig(w http.ResponseWriter, r *http.Reques
 	})
 }
 
+// modelRenameRequest is the payload of POST /api/models/rename/{model}.
+type modelRenameRequest struct {
+	NewID string `json:"new_id"`
+}
+
+// handleAPIRenameModel renames the model's ID in the primary config file:
+// the models: key plus every exact reference to the old ID (listeners,
+// routing groups, selectors, profile pins, startup preloads, matrix vars,
+// evict costs and set DSLs). Glob patterns, peer model lists and other
+// models' aliases are untouched. The model's URL, its /v1/models id and the
+// UI links all follow the new ID. A hot reload follows, so a running model
+// stops and starts under the new ID on its next request.
+func (s *Server) handleAPIRenameModel(w http.ResponseWriter, r *http.Request) {
+	oldID := r.PathValue("model")
+
+	var req modelRenameRequest
+	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+		swaputil.SendResponse(w, r, http.StatusBadRequest, `request body must be JSON: {"new_id": "new-model-id"}`)
+		return
+	}
+	newID := strings.TrimSpace(req.NewID)
+
+	if _, ok := s.cfg.Models[oldID]; !ok {
+		swaputil.SendResponse(w, r, http.StatusNotFound, fmt.Sprintf("model %q not found", oldID))
+		return
+	}
+	if newID == "" {
+		swaputil.SendResponse(w, r, http.StatusBadRequest, "new_id is required")
+		return
+	}
+	if newID == oldID {
+		swaputil.SendResponse(w, r, http.StatusBadRequest, "new_id is the same as the current model ID")
+		return
+	}
+	if !validModelID(newID) {
+		swaputil.SendResponse(w, r, http.StatusBadRequest,
+			"invalid new ID: use letters, digits, '-', '_', '.' or ':' only (max 128 characters)")
+		return
+	}
+	if _, ok := s.cfg.ResolveBaseModel(newID); ok {
+		swaputil.SendResponse(w, r, http.StatusConflict,
+			fmt.Sprintf("new ID %q is already in use as a model, alias or peer model", newID))
+		return
+	}
+	if _, ok := s.cfg.Selectors[newID]; ok {
+		swaputil.SendResponse(w, r, http.StatusConflict, fmt.Sprintf("new ID %q is already a selector", newID))
+		return
+	}
+	if s.configFile == "" {
+		swaputil.SendResponse(w, r, http.StatusConflict, "config editing is not available: no primary config file")
+		return
+	}
+
+	s.editMu.Lock()
+	defer s.editMu.Unlock()
+
+	data, err := os.ReadFile(s.configFile)
+	if err != nil {
+		swaputil.SendResponse(w, r, http.StatusInternalServerError, fmt.Sprintf("read config: %v", err))
+		return
+	}
+
+	patched, err := config.RenameModelYAML(data, oldID, newID)
+	if errors.Is(err, config.ErrModelNotInFile) {
+		swaputil.SendResponse(w, r, http.StatusConflict,
+			fmt.Sprintf("model %q is defined outside the primary config file and cannot be renamed here", oldID))
+		return
+	}
+	if err != nil {
+		swaputil.SendResponse(w, r, http.StatusBadRequest, err.Error())
+		return
+	}
+
+	newCfg, err := config.LoadConfigFromReader(bytes.NewReader(patched))
+	if err != nil {
+		swaputil.SendResponse(w, r, http.StatusBadRequest, fmt.Sprintf("patched config is invalid: %v", err))
+		return
+	}
+	if _, ok := newCfg.Models[newID]; !ok {
+		swaputil.SendResponse(w, r, http.StatusBadRequest, "patched config does not contain the renamed model")
+		return
+	}
+	if _, ok := newCfg.Models[oldID]; ok {
+		swaputil.SendResponse(w, r, http.StatusBadRequest, "patched config still contains the old model ID")
+		return
+	}
+
+	if err := config.WriteFileAtomic(s.configFile, patched); err != nil {
+		swaputil.SendResponse(w, r, http.StatusInternalServerError, fmt.Sprintf("write config: %v", err))
+		return
+	}
+
+	s.logs.ProxyLogs.Infof("model %q renamed to %q via UI, triggering reload", oldID, newID)
+
+	reloaded := false
+	if s.reloadFn != nil {
+		go s.reloadFn()
+		reloaded = true
+	}
+
+	swaputil.RespondJSON(w, r, http.StatusOK, map[string]any{
+		"status":    "ok",
+		"model_id":  oldID,
+		"new_id":    newID,
+		"reloading": reloaded,
+	})
+}
+
 // marshalModelConfigFallback renders an effective ModelConfig as YAML for
 // read-only display when the raw block cannot be extracted.
 func marshalModelConfigFallback(mc config.ModelConfig) string {
