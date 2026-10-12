@@ -72,7 +72,10 @@ func ValidateListeners(listeners []ListenerConfig) error {
 }
 
 // ParseListenAddr validates "host:port" and returns it in normalized
-// "host:port" form. Port must be numeric in range 1-65535.
+// "host:port" form. Port must be numeric in range 1-65535. An empty host
+// stays empty (":port"), which binds all interfaces on every protocol
+// family — the same semantics a bare -listen address has before listeners
+// are configured.
 func ParseListenAddr(listen string) (string, error) {
 	listen = strings.TrimSpace(listen)
 	if listen == "" {
@@ -85,9 +88,6 @@ func ParseListenAddr(listen string) (string, error) {
 	port, err := strconv.Atoi(portStr)
 	if err != nil || port < 1 || port > 65535 {
 		return "", fmt.Errorf("invalid port %q in listen address %q", portStr, listen)
-	}
-	if host == "" {
-		host = "0.0.0.0"
 	}
 	return net.JoinHostPort(host, strconv.Itoa(port)), nil
 }
