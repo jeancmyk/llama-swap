@@ -4,6 +4,7 @@
     fetchBackends,
     type BackendInfo,
   } from "../../lib/modelConfigApi";
+  import { isValidModelID } from "../../lib/modelId";
   import * as Dialog from "$lib/components/ui/dialog/index.js";
   import { Button } from "$lib/components/ui/button/index.js";
   import { Input } from "$lib/components/ui/input/index.js";
@@ -39,7 +40,7 @@
   let saving = $state(false);
   let error = $state("");
 
-  let idValid = $derived(/^[a-zA-Z0-9][a-zA-Z0-9._:-]*$/.test(modelId));
+  let idValid = $derived(isValidModelID(modelId));
   let canSave = $derived(
     idValid && backendPath.trim() !== "" && mainFile.trim() !== "" && !saving,
   );

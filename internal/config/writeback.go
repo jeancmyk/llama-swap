@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"unicode"
 
 	"gopkg.in/yaml.v3"
 )
@@ -185,6 +186,232 @@ func SetModelNameYAML(data []byte, modelID, name string) ([]byte, error) {
 	}
 
 	return encodeNode(doc)
+}
+
+// RenameModelYAML renames the models.<oldID> key to models.<newID> in data
+// and rewrites every exact reference to oldID that the config loader
+// resolves to a model:
+//
+//   - listeners[].models (glob patterns are never touched)
+//   - routing.router.settings.groups[].members and the legacy top-level
+//     groups[].members
+//   - selectors[].targets
+//   - profiles[].pins keys and values
+//   - hooks.on_startup.preload
+//   - matrix vars values, evict_costs keys that are model IDs (var names are
+//     never touched), and whole identifier tokens in sets DSL expressions
+//
+// Everything else in the document is left byte-identical where yaml.v3's
+// round-trip allows it: comments, key ordering and scalar styles survive
+// because only the key node and the referenced scalar nodes are swapped in
+// place. Strings outside the reference lists (cmd, proxy, peer model lists,
+// comments, and aliases of other models) are never rewritten: an alias that
+// happens to equal the old ID is an independent name owned by that model,
+// and rewriting it would hand the renamed model's new ID to a different
+// model. Returns ErrModelNotInFile when oldID does not exist in this
+// document.
+func RenameModelYAML(data []byte, oldID, newID string) ([]byte, error) {
+	if oldID == newID {
+		return nil, fmt.Errorf("new ID is the same as the current model ID")
+	}
+
+	doc, err := yamlNodeRoundTrip(data)
+	if err != nil {
+		return nil, err
+	}
+	models, err := findModelsMapping(doc)
+	if err != nil {
+		return nil, err
+	}
+	key, _, _, found := findModelEntry(models, oldID)
+	if !found {
+		return nil, ErrModelNotInFile
+	}
+	key.Value = newID
+
+	root := doc.Content[0]
+
+	if listeners, _, ok := findTopLevelKey(root, "listeners"); ok && listeners.Kind == yaml.SequenceNode {
+		for _, item := range listeners.Content {
+			if item.Kind != yaml.MappingNode {
+				continue
+			}
+			if mv, _, ok := findTopLevelKey(item, "models"); ok {
+				rewriteSequenceScalars(mv, oldID, newID)
+			}
+		}
+	}
+	rewriteGroupMapping(root, "groups", oldID, newID)
+	if routing, _, ok := findTopLevelKey(root, "routing"); ok && routing.Kind == yaml.MappingNode {
+		if router, _, ok := findTopLevelKey(routing, "router"); ok && router.Kind == yaml.MappingNode {
+			if settings, _, ok := findTopLevelKey(router, "settings"); ok && settings.Kind == yaml.MappingNode {
+				rewriteGroupMapping(settings, "groups", oldID, newID)
+				rewriteMatrixBlock(settings, "matrix", oldID, newID)
+			}
+		}
+	}
+	rewriteSelectorTargets(root, oldID, newID)
+	rewriteProfilePins(root, oldID, newID)
+	if hooks, _, ok := findTopLevelKey(root, "hooks"); ok && hooks.Kind == yaml.MappingNode {
+		if onStartup, _, ok := findTopLevelKey(hooks, "on_startup"); ok && onStartup.Kind == yaml.MappingNode {
+			if pre, _, ok := findTopLevelKey(onStartup, "preload"); ok {
+				rewriteSequenceScalars(pre, oldID, newID)
+			}
+		}
+	}
+	rewriteMatrixBlock(root, "matrix", oldID, newID)
+
+	return encodeNode(doc)
+}
+
+// rewriteSequenceScalars replaces scalar elements of a sequence that
+// exactly equal oldID with newID. Glob patterns can never equal a model ID,
+// so they are left alone by the exact match.
+func rewriteSequenceScalars(seq *yaml.Node, oldID, newID string) {
+	if seq == nil || seq.Kind != yaml.SequenceNode {
+		return
+	}
+	for _, item := range seq.Content {
+		if item.Kind == yaml.ScalarNode && item.Value == oldID {
+			item.Value = newID
+		}
+	}
+}
+
+// rewriteGroupMapping rewrites exact oldID members in every group of the
+// container's groups: mapping.
+func rewriteGroupMapping(container *yaml.Node, groupsKey, oldID, newID string) {
+	groups, _, ok := findTopLevelKey(container, groupsKey)
+	if !ok || groups.Kind != yaml.MappingNode {
+		return
+	}
+	for i := 0; i+1 < len(groups.Content); i += 2 {
+		group := groups.Content[i+1]
+		if group.Kind != yaml.MappingNode {
+			continue
+		}
+		if members, _, ok := findTopLevelKey(group, "members"); ok {
+			rewriteSequenceScalars(members, oldID, newID)
+		}
+	}
+}
+
+// rewriteSelectorTargets rewrites exact oldID entries in every selector's
+// targets list.
+func rewriteSelectorTargets(root *yaml.Node, oldID, newID string) {
+	selectors, _, ok := findTopLevelKey(root, "selectors")
+	if !ok || selectors.Kind != yaml.MappingNode {
+		return
+	}
+	for i := 0; i+1 < len(selectors.Content); i += 2 {
+		selector := selectors.Content[i+1]
+		if selector.Kind != yaml.MappingNode {
+			continue
+		}
+		if targets, _, ok := findTopLevelKey(selector, "targets"); ok {
+			rewriteSequenceScalars(targets, oldID, newID)
+		}
+	}
+}
+
+// rewriteProfilePins rewrites oldID as both pin keys (the rewritten model)
+// and pin values (the target model) in every profile.
+func rewriteProfilePins(root *yaml.Node, oldID, newID string) {
+	profiles, _, ok := findTopLevelKey(root, "profiles")
+	if !ok || profiles.Kind != yaml.MappingNode {
+		return
+	}
+	for i := 0; i+1 < len(profiles.Content); i += 2 {
+		profile := profiles.Content[i+1]
+		if profile.Kind != yaml.MappingNode {
+			continue
+		}
+		pins, _, ok := findTopLevelKey(profile, "pins")
+		if !ok || pins.Kind != yaml.MappingNode {
+			continue
+		}
+		for j := 0; j+1 < len(pins.Content); j += 2 {
+			if pins.Content[j].Kind == yaml.ScalarNode && pins.Content[j].Value == oldID {
+				pins.Content[j].Value = newID
+			}
+			if pins.Content[j+1].Kind == yaml.ScalarNode && pins.Content[j+1].Value == oldID {
+				pins.Content[j+1].Value = newID
+			}
+		}
+	}
+}
+
+// rewriteMatrixBlock rewrites model ID references inside a matrix block
+// nested under container's matrixKey: vars values, evict_costs keys that
+// name models (var names are never touched), and whole identifier tokens in
+// set DSL expressions.
+func rewriteMatrixBlock(container *yaml.Node, matrixKey, oldID, newID string) {
+	matrix, _, ok := findTopLevelKey(container, matrixKey)
+	if !ok || matrix.Kind != yaml.MappingNode {
+		return
+	}
+
+	vars, _, varsOK := findTopLevelKey(matrix, "vars")
+	if varsOK && vars.Kind == yaml.MappingNode {
+		for i := 0; i+1 < len(vars.Content); i += 2 {
+			if vars.Content[i+1].Kind == yaml.ScalarNode && vars.Content[i+1].Value == oldID {
+				vars.Content[i+1].Value = newID
+			}
+		}
+	}
+	if evict, _, ok := findTopLevelKey(matrix, "evict_costs"); ok && evict.Kind == yaml.MappingNode {
+		varNames := make(map[string]bool)
+		if varsOK && vars.Kind == yaml.MappingNode {
+			for i := 0; i < len(vars.Content); i += 2 {
+				if vars.Content[i].Kind == yaml.ScalarNode {
+					varNames[vars.Content[i].Value] = true
+				}
+			}
+		}
+		for i := 0; i+1 < len(evict.Content); i += 2 {
+			if evict.Content[i].Kind == yaml.ScalarNode && evict.Content[i].Value == oldID && !varNames[oldID] {
+				evict.Content[i].Value = newID
+			}
+		}
+	}
+	if sets, _, ok := findTopLevelKey(matrix, "sets"); ok && sets.Kind == yaml.MappingNode {
+		for i := 0; i+1 < len(sets.Content); i += 2 {
+			if sets.Content[i+1].Kind == yaml.ScalarNode && sets.Content[i+1].Value != "" {
+				sets.Content[i+1].Value = replaceDSLIdentifier(sets.Content[i+1].Value, oldID, newID)
+			}
+		}
+	}
+}
+
+// isDSLIdentChar mirrors the matrix DSL lexer's identifier grammar.
+func isDSLIdentChar(ch rune) bool {
+	return unicode.IsLetter(ch) || unicode.IsDigit(ch) || ch == '_' || ch == '-' || ch == '.'
+}
+
+// replaceDSLIdentifier replaces every whole identifier token in a matrix DSL
+// expression that equals oldID with newID. Only maximal identifier runs are
+// considered, so renaming "a" never rewrites "ab" or "a-v2".
+func replaceDSLIdentifier(dsl, oldID, newID string) string {
+	runes := []rune(dsl)
+	out := make([]rune, 0, len(runes))
+	for i := 0; i < len(runes); {
+		if !isDSLIdentChar(runes[i]) {
+			out = append(out, runes[i])
+			i++
+			continue
+		}
+		start := i
+		for i < len(runes) && isDSLIdentChar(runes[i]) {
+			i++
+		}
+		token := string(runes[start:i])
+		if token == oldID {
+			out = append(out, []rune(newID)...)
+		} else {
+			out = append(out, runes[start:i]...)
+		}
+	}
+	return string(out)
 }
 
 // RemoveModelYAML deletes the models.<modelID> entry from data and returns
