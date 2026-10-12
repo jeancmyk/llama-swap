@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"unicode"
 
 	"gopkg.in/yaml.v3"
@@ -18,10 +19,30 @@ var ErrModelNotInFile = errors.New("model not found in config file")
 // yamlNodeRoundTrip parses data into a document node. yaml.v3 keeps comments
 // (head/line/foot) and scalar styles (literal blocks, quoting) on the node
 // tree, so re-encoding preserves the parts of the file we do not touch.
+//
+// An empty file, a whitespace-only file and a comment-only file all parse to
+// a null document (Kind 0, no content). That is a legitimate starting point
+// for a config being built from scratch — the UI's "new model" flow writes
+// the first model into exactly such a file — so those become an empty
+// mapping here instead of an error. Leading comments are salvaged from the
+// raw bytes by leadingComments; see the note there for why they cannot come
+// from the parsed node tree.
 func yamlNodeRoundTrip(data []byte) (*yaml.Node, error) {
 	var doc yaml.Node
 	if err := yaml.Unmarshal(data, &doc); err != nil {
 		return nil, fmt.Errorf("parse config: %w", err)
+	}
+	if doc.Kind == 0 {
+		// null document: empty or comments only. Start from an empty mapping.
+		// yaml.v3 drops comments attached to a null document (there is no
+		// node for them to belong to), so leading comment lines are salvaged
+		// from the raw text and re-attached as the root's head comment.
+		root := &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map", HeadComment: leadingComments(data)}
+		doc = yaml.Node{
+			Kind:    yaml.DocumentNode,
+			Content: []*yaml.Node{root},
+		}
+		return &doc, nil
 	}
 	if doc.Kind != yaml.DocumentNode || len(doc.Content) == 0 {
 		return nil, fmt.Errorf("config is not a valid YAML document")
@@ -31,6 +52,27 @@ func yamlNodeRoundTrip(data []byte) (*yaml.Node, error) {
 		return nil, fmt.Errorf("config root must be a mapping")
 	}
 	return &doc, nil
+}
+
+// leadingComments collects the comment lines at the top of a document that
+// yaml.v3 discarded, joined with newlines. Blank lines between comments are
+// dropped: the emitter re-inserts comment lines one per line and keeps no
+// position information, so blank spacing cannot be reproduced faithfully.
+func leadingComments(data []byte) string {
+	var lines []string
+	for _, raw := range strings.Split(string(data), "\n") {
+		line := strings.TrimSpace(strings.TrimSuffix(raw, "\r"))
+		if line == "" {
+			continue
+		}
+		if !strings.HasPrefix(line, "#") {
+			// Real content: this is not a null document after all, and the
+			// parser would have kept it. Stop rather than guess.
+			return ""
+		}
+		lines = append(lines, line)
+	}
+	return strings.Join(lines, "\n")
 }
 
 // findTopLevelKey returns the value node for key in a mapping node.
@@ -49,6 +91,26 @@ func findModelsMapping(doc *yaml.Node) (*yaml.Node, error) {
 	val, _, ok := findTopLevelKey(root, "models")
 	if !ok {
 		return nil, fmt.Errorf("config file has no `models` section")
+	}
+	if val.Kind != yaml.MappingNode {
+		return nil, fmt.Errorf("`models` in config file is not a mapping")
+	}
+	return val, nil
+}
+
+// ensureModelsMapping is findModelsMapping for the append path: when the file
+// has no `models:` section yet (an empty or brand-new config being built from
+// the UI) the section is created rather than reported as an error. Callers
+// that must not mutate the document — reads, renames, removals — keep using
+// findModelsMapping so a missing section stays a real error there.
+func ensureModelsMapping(doc *yaml.Node) (*yaml.Node, error) {
+	root := doc.Content[0]
+	val, _, ok := findTopLevelKey(root, "models")
+	if !ok {
+		val = &yaml.Node{Kind: yaml.MappingNode, Tag: "!!map"}
+		key := &yaml.Node{Kind: yaml.ScalarNode, Tag: "!!str", Value: "models"}
+		root.Content = append(root.Content, key, val)
+		return val, nil
 	}
 	if val.Kind != yaml.MappingNode {
 		return nil, fmt.Errorf("`models` in config file is not a mapping")
@@ -119,7 +181,7 @@ func PatchModelYAML(data []byte, modelID, replacement string) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
-	models, err := findModelsMapping(doc)
+	models, err := ensureModelsMapping(doc)
 	if err != nil {
 		return nil, err
 	}
