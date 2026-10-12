@@ -19,8 +19,11 @@ async function requestJSON<T>(url: string, init?: RequestInit): Promise<T> {
   if (!response.ok) {
     let message = `${response.status}`;
     try {
-      const body = (await response.json()) as { error?: string };
-      if (body.error) message = body.error;
+      // Errors use the OpenAI-compatible envelope: {error: {message, ...}}.
+      const body = (await response.json()) as { error?: { message?: string } | string };
+      const detail = body.error;
+      const text = typeof detail === "string" ? detail : detail?.message;
+      if (text) message = text;
     } catch {
       /* keep status code */
     }
