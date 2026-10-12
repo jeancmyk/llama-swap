@@ -47,6 +47,10 @@ type apiModel struct {
 	// MissingFiles lists file arguments from the model's cmd that do not
 	// exist on disk (startup scan). Non-empty only for local models.
 	MissingFiles []modelFileInfo `json:"missing_files,omitempty"`
+	// ConfigUpdatePending lists capability fields that llama-swap auto-filled
+	// into the config file under the pending marker, awaiting the user's
+	// keep/discard decision. Non-empty only for local models.
+	ConfigUpdatePending []string `json:"config_update_pending,omitempty"`
 }
 
 type apiProfile struct {
@@ -153,19 +157,20 @@ func (s *Server) modelStatus() []apiModel {
 			missing = append([]modelFileInfo(nil), missing...)
 		}
 		models = append(models, apiModel{
-			Id:              id,
-			Name:            mc.Name,
-			Description:     mc.Description,
-			State:           state,
-			Unlisted:        mc.Unlisted,
-			Aliases:         mc.Aliases,
-			Capabilities:    capsMap,
-			ContextLength:   ctxLen,
-			ReadySince:      readySince,
-			UptimeMs:        uptimeMs,
-			LoadingProgress: loading.Progress,
-			LoadingMessage:  loading.Message,
-			MissingFiles:    missing,
+			Id:                  id,
+			Name:                mc.Name,
+			Description:         mc.Description,
+			State:               state,
+			Unlisted:            mc.Unlisted,
+			Aliases:             mc.Aliases,
+			Capabilities:        capsMap,
+			ContextLength:       ctxLen,
+			ReadySince:          readySince,
+			UptimeMs:            uptimeMs,
+			LoadingProgress:     loading.Progress,
+			LoadingMessage:      loading.Message,
+			MissingFiles:        missing,
+			ConfigUpdatePending: s.pendingFields(id),
 		})
 	}
 
@@ -517,12 +522,13 @@ func (s *Server) handleAPICancelInflight(w http.ResponseWriter, r *http.Request)
 type messageType string
 
 const (
-	msgTypeModelStatus messageType = "modelStatus"
-	msgTypeLogData     messageType = "logData"
-	msgTypeActivity    messageType = "activity"
-	msgTypeInFlight    messageType = "inflight"
-	msgTypeUIConfig    messageType = "uiConfig"
-	msgTypeProfile     messageType = "profileChanged"
+	msgTypeModelStatus  messageType = "modelStatus"
+	msgTypeLogData      messageType = "logData"
+	msgTypeActivity     messageType = "activity"
+	msgTypeInFlight     messageType = "inflight"
+	msgTypeUIConfig     messageType = "uiConfig"
+	msgTypeProfile      messageType = "profileChanged"
+	msgTypeConfigStatus messageType = "configStatus"
 )
 
 // sendDropReportInterval is how often an SSE handler reports messages that
@@ -646,12 +652,28 @@ func (s *Server) handleAPIEvents(w http.ResponseWriter, r *http.Request) {
 				send(messageEnvelope{Type: msgTypeProfile, Data: string(j)})
 			}
 		}
+		// Reports whether saved config changes are waiting for an apply, so
+		// the UI can show the Apply button without polling.
+		sendConfigStatus := func() {
+			if j, err := json.Marshal(map[string]any{"dirty": s.ConfigDirty()}); err == nil {
+				send(messageEnvelope{Type: msgTypeConfigStatus, Data: string(j)})
+			}
+		}
 
 		unsubscribe := []context.CancelFunc{
 			event.On(func(e swaputil.ProcessStateChangeEvent) { sendModels() }),
 			event.On(func(e swaputil.ProcessLoadingEvent) { sendModels() }),
 			event.On(func(e swaputil.ModelCapabilitiesChangedEvent) { sendModels() }),
-			event.On(func(e swaputil.ConfigFileChangedEvent) { sendModels() }),
+			event.On(func(e swaputil.ConfigFileChangedEvent) {
+				sendModels()
+				sendConfigStatus()
+			}),
+			// A save-only write: the file changed but no reload ran, so both
+			// the pending badge and the apply state may have moved.
+			event.On(func(e swaputil.ConfigSavedEvent) {
+				sendModels()
+				sendConfigStatus()
+			}),
 			event.On(func(e swaputil.ProfileChangedEvent) {
 				sendProfile()
 				sendModels()
@@ -664,6 +686,7 @@ func (s *Server) handleAPIEvents(w http.ResponseWriter, r *http.Request) {
 		sendModels()
 		sendUIConfig()
 		sendProfile()
+		sendConfigStatus()
 		sendInFlight(s.inflight.Current())
 
 		return func() { cancelAll(unsubscribe) }

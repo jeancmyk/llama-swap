@@ -2,9 +2,9 @@
 title: Model capabilities and model listings
 summary: Advertise images, tools and context length in /v1/models, automatically or by hand.
 category: guides
-tags: [capabilities, models, tools, vision, context, autodetect, llama-server, vllm, halogen, playground, decisions]
-config_keys: [models.*.capabilities, models.*.capabilities.disableAuto, store.path]
-updated: 2026-10-10
+tags: [capabilities, models, tools, vision, context, autodetect, llama-server, vllm, halogen, playground, decisions, writeback]
+config_keys: [models.*.capabilities, models.*.capabilities.disableAuto, capabilitiesWriteback, store.path]
+updated: 2026-10-12
 ---
 
 # Model capabilities and model listings
@@ -96,6 +96,47 @@ models:
 
 Set only what the model really supports. A false claim makes clients send
 requests that fail or get ignored.
+
+## Persisting discoveries in the config file
+
+By default discovery fills the values only in the cache, so after a restart
+each model has to be loaded again before its capabilities reappear (see
+`store.path`). With `capabilitiesWriteback: true` the discovered values are
+also written into the config file, where they survive restarts even without a
+store:
+
+```yaml
+capabilitiesWriteback: true
+```
+
+The write never touches a field the file already sets, and it lands under a
+pending marker comment that llama-swap manages:
+
+```yaml
+models:
+  vision-model:
+    cmd: llama-server -m vision.gguf --mmproj mmproj.gguf --port ${PORT}
+    # llama-swap auto (2026-10-12) in=[text,image] out=[text] tools=true
+    capabilities:
+      in: [text, image]
+      out: [text]
+      tools: true
+      context: 8192
+```
+
+`context` above was written by hand, so the marker does not record it and
+discovery never overwrites it. Until
+you decide, the model shows an **update pending** tag in the model list, and
+the model's config page highlights the marker line in yellow with Keep and
+Discard buttons:
+
+- **Keep** strips the marker. The values become plain config, managed by you
+  from then on.
+- **Discard** removes the auto-filled fields, stops them being advertised at
+  once, and records them as declined so the next probe does not re-add them.
+
+The write itself never reloads llama-swap — the values are already live in
+the cache, and the file write is pure durability.
 
 ## Turning discovery off
 

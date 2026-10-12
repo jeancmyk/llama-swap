@@ -179,19 +179,23 @@ func (c *ProfileConfig) UnmarshalYAML(value *yaml.Node) error {
 }
 
 type Config struct {
-	Tailcat            *TailcatConfig    `yaml:"tailcat"`
-	HealthCheckTimeout int               `yaml:"healthCheckTimeout"`
-	LogRequests        bool              `yaml:"logRequests"`
-	LogLevel           string            `yaml:"logLevel"`
-	LogTimeFormat      string            `yaml:"logTimeFormat"`
-	LogToStdout        string            `yaml:"logToStdout"`
-	MetricsMaxInMemory int               `yaml:"metricsMaxInMemory"`
-	CaptureBuffer      int               `yaml:"captureBuffer"`
-	Store              *Store            `yaml:"store"`
-	UI                 UIConfig          `yaml:"ui"`
-	Performance        PerformanceConfig `yaml:"performance"`
-	GlobalTTL          int               `yaml:"globalTTL"`
-	UnloadTimeout      int               `yaml:"unloadTimeout"`
+	Tailcat            *TailcatConfig `yaml:"tailcat"`
+	HealthCheckTimeout int            `yaml:"healthCheckTimeout"`
+	LogRequests        bool           `yaml:"logRequests"`
+	LogLevel           string         `yaml:"logLevel"`
+	LogTimeFormat      string         `yaml:"logTimeFormat"`
+	LogToStdout        string         `yaml:"logToStdout"`
+	MetricsMaxInMemory int            `yaml:"metricsMaxInMemory"`
+	CaptureBuffer      int            `yaml:"captureBuffer"`
+	Store              *Store         `yaml:"store"`
+	// CapabilitiesWriteback turns on automatic write-back of discovered
+	// capabilities into the primary config file (marked pending in the UI).
+	// Default false: discovery then only fills the in-memory / SQLite cache.
+	CapabilitiesWriteback bool              `yaml:"capabilitiesWriteback"`
+	UI                    UIConfig          `yaml:"ui"`
+	Performance           PerformanceConfig `yaml:"performance"`
+	GlobalTTL             int               `yaml:"globalTTL"`
+	UnloadTimeout         int               `yaml:"unloadTimeout"`
 
 	Models    map[string]ModelConfig    `yaml:"models"` /* key is model ID */
 	Profiles  map[string]ProfileConfig  `yaml:"profiles"`

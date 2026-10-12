@@ -214,6 +214,9 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 		if len(mc.Aliases) > 0 {
 			internalMetadata["aliases"] = mc.Aliases
 		}
+		if pending := s.pendingFields(id); len(pending) > 0 {
+			internalMetadata["config_update_pending"] = pending
+		}
 		// Resolved once and reused for the aliases, which describe the same
 		// upstream and must not disagree with the model they point at.
 		caps := s.resolveCapabilities(r.Context(), id, mc)

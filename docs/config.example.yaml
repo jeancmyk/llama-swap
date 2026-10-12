@@ -133,6 +133,19 @@ unloadTimeout: 10
 # - see issue #1086
 globalConcurrencyLimit: 0
 
+# capabilitiesWriteback: write auto-discovered capabilities into the primary
+# config file under a pending marker
+# - optional, default: false
+# - when true, once a model is probed and capabilities are discovered, the
+#   fields the config does not already set are written into the model's
+#   capabilities: block under a "# llama-swap auto" marker comment. The model
+#   shows as "update pending" in the UI until you keep (accept) or discard them.
+# - requires a primary config file (-config); without one there is nothing to
+#   write into and discovery only fills the in-memory/SQLite cache
+# - saving a config change does not restart llama-swap; use Apply (a hot
+#   reload) to activate pending changes
+capabilitiesWriteback: false
+
 # macros: a dictionary of string substitutions
 # - optional, default: empty dictionary
 # - macros are reusable snippets

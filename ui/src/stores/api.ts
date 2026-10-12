@@ -24,6 +24,9 @@ export const models = writable<Model[]>([]);
 export const playgroundModels = writable<Model[]>([]);
 export const profiles = writable<Profile[]>([]);
 export const activeProfile = writable<string | null>(null);
+// true when the primary config file is ahead of the running server: changes
+// were saved but not applied yet (needs an Apply / hot reload).
+export const configDirty = writable<boolean>(false);
 
 // Model records used by Playground come from the OpenAI-compatible listing.
 export const profileModels = derived(
@@ -65,6 +68,7 @@ export function enableAPIEvents(enabled: boolean): void {
     inFlightRequests.set(0);
     inflightRequestEntries.set([]);
     uiConfig.set(defaultUIConfig());
+    configDirty.set(false);
     playgroundModelsRequest++;
     playgroundModelsRefreshQueued = false;
     playgroundModels.set([]);
@@ -89,6 +93,7 @@ export function enableAPIEvents(enabled: boolean): void {
       inFlightRequests.set(0);
       inflightRequestEntries.set([]);
       uiConfig.set(defaultUIConfig());
+      configDirty.set(false);
       models.set([]);
       playgroundModelsRequest++;
       playgroundModelsRefreshQueued = false;
@@ -189,6 +194,12 @@ export function handleAPIEventMessage(data: string): void {
       activeProfile.set(state.active);
       break;
     }
+
+    case "configStatus": {
+      const state = JSON.parse(message.data) as { dirty?: boolean };
+      configDirty.set(state.dirty === true);
+      break;
+    }
   }
 }
 
@@ -253,6 +264,7 @@ interface ModelListRecord {
       strategy?: string;
       targets?: string[];
       spillover?: number;
+      config_update_pending?: string[];
     };
   };
 }
@@ -303,6 +315,8 @@ async function loadPlaygroundModels(request: number): Promise<Model[]> {
           strategy: metadata?.strategy,
           targets: metadata?.targets ?? [],
           spillover: metadata?.spillover,
+          config_update_pending:
+            metadata?.type === "model" ? metadata.config_update_pending : undefined,
         };
       });
     newModels.sort((a, b) => {

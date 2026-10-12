@@ -45,13 +45,24 @@ export async function fetchModelConfig(modelId: string): Promise<ModelConfigInfo
   return requestJSON<ModelConfigInfo>(`/api/models/config/${encodeURIComponent(modelId)}`);
 }
 
-export async function updateModelConfig(modelId: string, yaml: string): Promise<{ status: string; reloading: boolean }> {
+// SaveOptions controls the save/apply split. The default (reload: false) only
+// saves the change to the config file; the running server keeps the old
+// settings until a separate Apply (POST /api/reload) hot-reloads.
+export interface SaveOptions {
+  reload?: boolean;
+}
+
+export async function updateModelConfig(
+  modelId: string,
+  yaml: string,
+  options?: SaveOptions,
+): Promise<{ status: string; reloading: boolean }> {
   return requestJSON<{ status: string; reloading: boolean }>(
     `/api/models/config/${encodeURIComponent(modelId)}`,
     {
       method: "PUT",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ yaml }),
+      body: JSON.stringify({ yaml, reload: options?.reload ?? false }),
     },
   );
 }
@@ -59,13 +70,14 @@ export async function updateModelConfig(modelId: string, yaml: string): Promise<
 export async function renameModel(
   modelId: string,
   name: string,
+  options?: SaveOptions,
 ): Promise<{ status: string; reloading: boolean }> {
   return requestJSON<{ status: string; reloading: boolean }>(
     `/api/models/config/${encodeURIComponent(modelId)}`,
     {
       method: "PATCH",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name }),
+      body: JSON.stringify({ name, reload: options?.reload ?? false }),
     },
   );
 }
@@ -92,13 +104,14 @@ export async function renameModelId(
 export async function addModelConfig(
   modelId: string,
   yaml: string,
+  options?: SaveOptions,
 ): Promise<{ status: string; reloading: boolean }> {
   return requestJSON<{ status: string; reloading: boolean }>(
     `/api/models/config/${encodeURIComponent(modelId)}`,
     {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ yaml }),
+      body: JSON.stringify({ yaml, reload: options?.reload ?? false }),
     },
   );
 }
@@ -110,6 +123,46 @@ export async function removeModelConfig(
     `/api/models/config/${encodeURIComponent(modelId)}`,
     { method: "DELETE" },
   );
+}
+
+// capabilitiesURL builds /api/models/capabilities/{model}/accept|discard.
+// Model ids may contain "/", so the id is segment-encoded while the action
+// stays the final path segment (the server splits it off first).
+function capabilitiesURL(modelId: string, action: "accept" | "discard"): string {
+  const segments = modelId.split("/").map(encodeURIComponent).join("/");
+  return `/api/models/capabilities/${segments}/${action}`;
+}
+
+// acceptModelCapabilities adopts the auto-filled capability fields: the
+// pending marker is stripped and the values become plain config.
+export async function acceptModelCapabilities(
+  modelId: string,
+): Promise<{ status: string; reloading: boolean }> {
+  return requestJSON<{ status: string; reloading: boolean }>(capabilitiesURL(modelId, "accept"), {
+    method: "POST",
+  });
+}
+
+// discardModelCapabilities removes the auto-filled fields from the config,
+// stops the values being advertised at once, and prevents re-adding.
+export async function discardModelCapabilities(
+  modelId: string,
+): Promise<{ status: string; reloading: boolean }> {
+  return requestJSON<{ status: string; reloading: boolean }>(capabilitiesURL(modelId, "discard"), {
+    method: "POST",
+  });
+}
+
+// triggerReload is the explicit Apply step of the save/apply split: it hot-
+// reloads the saved config, which stops running models.
+export async function triggerReload(): Promise<{ status: string; reloading: boolean }> {
+  return requestJSON<{ status: string; reloading: boolean }>("/api/reload", { method: "POST" });
+}
+
+// fetchConfigStatus reports whether the config file is ahead of the running
+// server (saved changes pending an apply).
+export async function fetchConfigStatus(): Promise<{ dirty: boolean }> {
+  return requestJSON<{ dirty: boolean }>("/api/config/status");
 }
 
 export async function fetchBackends(): Promise<BackendInfo[]> {

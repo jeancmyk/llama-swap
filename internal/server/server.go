@@ -85,6 +85,25 @@ type Server struct {
 	reloadFn   func()
 	editMu     sync.Mutex
 
+	// bootTime is when this Server instance was built. The config file is
+	// "dirty" (saved changes pending an apply) while its mtime is newer,
+	// which is exactly the state after a save-only write and cleared by a
+	// reload (a reload builds a new Server).
+	bootTime time.Time
+
+	// pendingCaps tracks which models have auto-filled (pending) capability
+	// fields in the config file, from the marker lines above each
+	// capabilities: key. Surfaced in /v1/models and the model status feed.
+	pendingMu   sync.RWMutex
+	pendingCaps map[string][]string
+
+	// selfWrite remembers the config file state right after one of llama-swap's
+	// own writes, so the poll-based watcher does not reload (stopping running
+	// models) on its own change.
+	selfWriteMu   sync.Mutex
+	selfWriteMod  time.Time
+	selfWriteSize int64
+
 	// listenerStatus reports runtime bind state of HTTP listeners for the API.
 	listenerStatus func() []ListenerRuntimeStatus
 
@@ -114,9 +133,17 @@ func isTailcatRequest(ctx context.Context) bool {
 }
 
 // SetConfigFile enables config write-back endpoints against path. An empty
-// path disables them.
+// path disables them. Attaching a file rescans it for pending capability
+// markers, since this Server instance starts with an empty pending map.
 func (s *Server) SetConfigFile(path string) {
 	s.configFile = path
+	if path != "" {
+		s.rescanPending()
+	} else {
+		s.pendingMu.Lock()
+		s.pendingCaps = make(map[string][]string)
+		s.pendingMu.Unlock()
+	}
 }
 
 // SetReloadFunc installs the callback used to hot-reload configuration after a
@@ -288,6 +315,8 @@ func New(cfg config.Config, logs *logmon.Group, perfMon *perf.Monitor, st store.
 		peer:          peer,
 		shutdownCtx:   shutdownCtx,
 		shutdownFn:    shutdownFn,
+		bootTime:      time.Now(),
+		pendingCaps:   make(map[string][]string),
 	}
 	s.capcompat = capcompat.New(st.Cache(), logs.ProxyLogs)
 	s.capcompatCancel = event.On(s.onProcessStateChange)
@@ -488,6 +517,16 @@ func (s *Server) routes() {
 	mux.Handle("GET /api/listeners", apiChain.ThenFunc(s.handleAPIListeners))
 	mux.Handle("PUT /api/listeners", apiChain.ThenFunc(s.handleAPIPutListeners))
 	mux.Handle("GET /api/backends", apiChain.ThenFunc(s.handleAPIBackends))
+
+	// Capability write-back: review the fields discovery auto-filled. The
+	// wildcard captures the model id and the action as its last segment,
+	// because a mux wildcard must end the pattern and model ids may contain
+	// "/".
+	mux.Handle("POST /api/models/capabilities/{model...}", apiChain.ThenFunc(s.handleAPICapabilitiesAction))
+
+	// Save/apply split: explicit reload (Apply) and saved-not-yet-applied state.
+	mux.Handle("POST /api/reload", apiChain.ThenFunc(s.handleAPIReload))
+	mux.Handle("GET /api/config/status", apiChain.ThenFunc(s.handleAPIConfigStatus))
 
 	s.mux = mux
 	s.handler = chain.New(CreateRequestLogMiddleware(s.logs.HttpLogs), CreateCORSMiddleware(s.cfg)).Then(mux)

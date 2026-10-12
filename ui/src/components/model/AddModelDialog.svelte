@@ -113,8 +113,10 @@
     <Dialog.Header>
       <Dialog.Title>Add model</Dialog.Title>
       <Dialog.Description>
-        New models are served by the main endpoint. Custom listeners are never
-        modified automatically.
+        The model is saved to the config file; press Apply changes in the
+        header to start serving it (running models are stopped). New models are
+        served by the main endpoint. Custom listeners are never modified
+        automatically.
       </Dialog.Description>
     </Dialog.Header>
 

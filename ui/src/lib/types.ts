@@ -56,6 +56,10 @@ export interface Model {
   strategy?: string;
   targets?: string[];
   spillover?: number;
+  // capability fields llama-swap auto-filled into the config file under the
+  // pending marker, awaiting the user's keep/discard decision. Non-empty only
+  // for local models with capabilitiesWriteback enabled.
+  config_update_pending?: string[];
 }
 
 export interface Profile {
@@ -193,7 +197,7 @@ export interface PerformanceResponse {
 }
 
 export interface APIEventEnvelope {
-  type: "modelStatus" | "logData" | "activity" | "inflight" | "uiConfig" | "profileChanged" | "perfsys" | "perfgpu";
+  type: "modelStatus" | "logData" | "activity" | "inflight" | "uiConfig" | "profileChanged" | "configStatus" | "perfsys" | "perfgpu";
   data: string;
 }
 

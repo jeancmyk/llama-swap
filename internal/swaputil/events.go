@@ -10,6 +10,7 @@ const InFlightRequestsEventID = 0x07
 const ProfileChangedEventID = 0x08
 const ModelCapabilitiesChangedEventID = 0x09
 const ProcessLoadingEventID = 0x0A
+const ConfigSavedEventID = 0x0B
 
 // ProcessStateChangeEvent is emitted whenever a process transitions between
 // lifecycle states. States are carried as strings so this package stays a leaf
@@ -105,4 +106,17 @@ type ModelCapabilitiesChangedEvent struct {
 
 func (e ModelCapabilitiesChangedEvent) Type() uint32 {
 	return ModelCapabilitiesChangedEventID
+}
+
+// ConfigSavedEvent is emitted when the primary config file is updated by a
+// write that intentionally does NOT trigger a hot reload (the save/apply
+// split): the change is durable on disk and will activate on the next reload,
+// while the running server keeps serving the old config until then. ModelID is
+// set when the write concerns one model's block.
+type ConfigSavedEvent struct {
+	ModelID string
+}
+
+func (e ConfigSavedEvent) Type() uint32 {
+	return ConfigSavedEventID
 }

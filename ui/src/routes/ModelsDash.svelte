@@ -4,6 +4,7 @@
   import { link } from "svelte-spa-router";
   import {
     activeProfile,
+    configDirty,
     fetchPlaygroundModels,
     models,
     profiles,
@@ -17,7 +18,7 @@
   import ModelLoadButton from "../components/ModelLoadButton.svelte";
   import Tag from "../components/Tag.svelte";
   import AddModelDialog from "../components/model/AddModelDialog.svelte";
-  import { removeModelConfig } from "../lib/modelConfigApi";
+  import { removeModelConfig, triggerReload } from "../lib/modelConfigApi";
   import * as Card from "$lib/components/ui/card/index.js";
   import { Button } from "$lib/components/ui/button/index.js";
   import * as Switch from "$lib/components/ui/switch/index.js";
@@ -31,6 +32,8 @@
   let removeTarget = $state<Model | null>(null);
   let removing = $state(false);
   let removeError = $state("");
+  let applying = $state(false);
+  let applyMessage = $state("");
 
   onMount(() => {
     void fetchPlaygroundModels();
@@ -81,6 +84,25 @@
       unloadingAll = false;
     }
   }
+
+  // Apply hot-reloads the saved config. It stops running models, so the
+  // button carries that in its message and only appears while the config
+  // is dirty.
+  async function handleApply(): Promise<void> {
+    if (applying) return;
+    applying = true;
+    applyMessage = "";
+    try {
+      await triggerReload();
+      applyMessage = "Applying saved settings — running models were stopped.";
+      // configDirty flips back via the configStatus SSE after the reload
+    } catch (e) {
+      applyMessage = `Apply failed: ${e}`;
+      console.error(e);
+    } finally {
+      applying = false;
+    }
+  }
 </script>
 
 {#snippet modelRow(model: Model)}
@@ -126,6 +148,13 @@
       <span title={model.missing_files.map((f) => `${f.flag} ${f.path}`).join("\n")}>
         <Tag class="bg-warning/15 text-warning px-1.5 text-[0.625rem] uppercase">
           missing files ({model.missing_files.length})
+        </Tag>
+      </span>
+    {/if}
+    {#if (model.config_update_pending?.length ?? 0) > 0}
+      <span title={`llama-swap auto-filled: ${model.config_update_pending?.join(", ")}`}>
+        <Tag class="bg-warning/15 text-warning px-1.5 text-[0.625rem] uppercase">
+          update pending
         </Tag>
       </span>
     {/if}
@@ -223,7 +252,26 @@
             {missingFilesCount} missing files
           </span>
         {/if}
+        {#if $configDirty}
+          <span class="text-warning text-xs uppercase tracking-wide" title="Config changes were saved and are waiting for Apply">
+            changes saved, not applied
+          </span>
+        {/if}
         <div class="ml-auto flex items-center gap-2">
+          {#if $configDirty}
+            <Button
+              variant="outline"
+              size="sm"
+              onclick={handleApply}
+              disabled={applying}
+              title="Hot-reload the saved config. Running models are stopped."
+            >
+              {#if applying}
+                <Loader2 class="size-3.5 animate-spin" />
+              {/if}
+              {applying ? "Applying…" : "Apply changes"}
+            </Button>
+          {/if}
           <Button
             variant="outline"
             size="sm"
@@ -248,6 +296,11 @@
         </div>
       </div>
     </Card.Header>
+    {#if applyMessage}
+      <div class="border-b bg-muted/40 px-4 py-2 text-xs text-green-600 dark:text-green-400">
+        {applyMessage}
+      </div>
+    {/if}
   </Card.Root>
 
   <div class="flex min-h-0 shrink-0 flex-col gap-4">

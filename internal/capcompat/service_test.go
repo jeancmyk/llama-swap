@@ -424,3 +424,68 @@ func mustJSON(t *testing.T, v any) []byte {
 	require.NoError(t, err)
 	return data
 }
+
+func TestCapcompat_DeclinedFields(t *testing.T) {
+	cache := newCountingCache()
+	svc := New(cache, nil)
+	ctx := context.Background()
+
+	// No record yet; the miss is remembered.
+	fields, found := svc.Declined(ctx, "k")
+	assert.False(t, found)
+	assert.Nil(t, fields)
+	reads := cache.gets.Load()
+	_, found = svc.Declined(ctx, "k")
+	assert.False(t, found)
+	assert.Equal(t, reads, cache.gets.Load(), "a remembered miss must not read the store")
+
+	require.NoError(t, svc.StoreDeclined(ctx, "k", []string{"in", "context"}))
+	assert.True(t, cache.has(declinedKey("k")))
+
+	fields, found = svc.Declined(ctx, "k")
+	require.True(t, found)
+	assert.ElementsMatch(t, []string{"in", "context"}, fields)
+
+	// Clearing replaces the record: storing an empty list removes it.
+	require.NoError(t, svc.StoreDeclined(ctx, "k", nil))
+	assert.False(t, cache.has(declinedKey("k")))
+	_, found = svc.Declined(ctx, "k")
+	assert.False(t, found)
+}
+
+func TestCapcompat_DeclinedSuppressionSurvivesDropOfCaps(t *testing.T) {
+	cache := newCountingCache()
+	svc := New(cache, nil)
+	ctx := context.Background()
+
+	// A capabilities row plus a declined record; Drop removes both so a new
+	// probe starts clean, but the DECLINED record is the user's decision and
+	// is written separately from discovery.
+	entry := store.CacheEntry{Key: "k", Data: mustJSON(t, Info{Upstream: "llama-server"})}
+	require.NoError(t, cache.Set(ctx, entry))
+	require.NoError(t, svc.StoreDeclined(ctx, "k", []string{"tools"}))
+
+	require.NoError(t, svc.Drop(ctx, "k"))
+	assert.False(t, cache.has("k"))
+	assert.False(t, cache.has(declinedKey("k")))
+
+	// The memo follows the drop.
+	_, found := svc.Declined(ctx, "k")
+	assert.False(t, found)
+}
+
+func TestCapcompat_Except(t *testing.T) {
+	caps := config.ModelCapConfig{
+		In:       []string{"text", "image"},
+		Out:      []string{"text"},
+		Tools:    true,
+		Reranker: true,
+		Context:  4096,
+	}
+	rest := caps.Except([]string{"in", "tools", "context", "nope"})
+	assert.Equal(t, config.ModelCapConfig{
+		Out:      []string{"text"},
+		Reranker: true,
+	}, rest)
+	assert.Equal(t, caps, caps.Except(nil))
+}
