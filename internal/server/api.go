@@ -201,11 +201,6 @@ func (s *Server) handleListModels(w http.ResponseWriter, r *http.Request) {
 		if mc.Unlisted {
 			continue
 		}
-		// Models with missing file arguments are not served: keep them off
-		// the listing so clients do not pick entries that cannot start.
-		if len(s.missingFiles[id]) > 0 {
-			continue
-		}
 		if !scopeAllowsRecord(scope, id, mc.Aliases) {
 			continue
 		}

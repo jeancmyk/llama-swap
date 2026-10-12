@@ -20,11 +20,6 @@ export interface ModelModalities {
   out: string[];
 }
 
-export interface MissingFileInfo {
-  flag: string;
-  path: string;
-}
-
 export interface Model {
   id: string;
   state: ModelStatus;
@@ -49,9 +44,6 @@ export interface Model {
   loadingProgress?: number;
   // the loading step the upstream last reported; only set while starting
   loadingMessage?: string;
-  // file arguments from the model's cmd that do not exist on disk
-  // (startup scan); such models are not served on the API
-  missing_files?: MissingFileInfo[];
   // selector-only fields from the v1/models llamaswap metadata
   strategy?: string;
   targets?: string[];

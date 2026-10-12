@@ -70,9 +70,6 @@
 
   let readyCount = $derived($models.filter((m) => m.state === "ready").length);
   let anyReady = $derived(readyCount > 0);
-  let missingFilesCount = $derived(
-    $models.filter((m) => (m.missing_files?.length ?? 0) > 0).length,
-  );
 
   async function handleUnloadAll(): Promise<void> {
     unloadingAll = true;
@@ -143,13 +140,6 @@
     </span>
     {#if model.unlisted}
       <Tag class="px-1.5 text-[0.625rem] uppercase">unlisted</Tag>
-    {/if}
-    {#if model.missing_files && model.missing_files.length > 0}
-      <span title={model.missing_files.map((f) => `${f.flag} ${f.path}`).join("\n")}>
-        <Tag class="bg-warning/15 text-warning px-1.5 text-[0.625rem] uppercase">
-          missing files ({model.missing_files.length})
-        </Tag>
-      </span>
     {/if}
     {#if (model.config_update_pending?.length ?? 0) > 0}
       <span title={`llama-swap auto-filled: ${model.config_update_pending?.join(", ")}`}>
@@ -247,11 +237,6 @@
         <span class="text-muted-foreground text-xs uppercase tracking-wide">
           {readyCount} ready
         </span>
-        {#if missingFilesCount > 0}
-          <span class="text-warning text-xs uppercase tracking-wide">
-            {missingFilesCount} missing files
-          </span>
-        {/if}
         {#if $configDirty}
           <span class="text-warning text-xs uppercase tracking-wide" title="Config changes were saved and are waiting for Apply">
             changes saved, not applied

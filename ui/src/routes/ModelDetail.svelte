@@ -113,15 +113,6 @@
             {/each}
           </div>
         {/if}
-        {#if model.missing_files && model.missing_files.length > 0}
-          <p class="text-warning text-xs">
-            {model.missing_files.length} model file{model.missing_files.length === 1 ? "" : "s"}
-            not found on disk — this model is not served on the API:
-            {#each model.missing_files as f (f.path)}
-              <span class="block font-mono">{f.flag} {f.path}</span>
-            {/each}
-          </p>
-        {/if}
       </Card.Header>
       <!-- Load status bar; the state text in the header carries it for screen readers. -->
       {#if percent !== undefined}

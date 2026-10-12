@@ -106,11 +106,6 @@ type Server struct {
 
 	// listenerStatus reports runtime bind state of HTTP listeners for the API.
 	listenerStatus func() []ListenerRuntimeStatus
-
-	// missingFiles maps model IDs to file arguments (parsed from their cmd)
-	// that do not exist on disk, from the scan at startup/reload. Models in
-	// here are flagged in the UI and excluded from the /v1/models listing.
-	missingFiles map[string][]modelFileInfo
 }
 
 func (s *Server) SetTailcatAddress(address string) {
@@ -334,11 +329,6 @@ func New(cfg config.Config, logs *logmon.Group, perfMon *perf.Monitor, st store.
 	s.tools = tools
 
 	s.routes()
-
-	// Scan model file arguments so broken entries can be flagged in the UI
-	// and kept off the API listing.
-	s.missingFiles = scanModelFiles(cfg.Models)
-	s.warnMissingFiles()
 
 	s.startPreload()
 	return s, nil
