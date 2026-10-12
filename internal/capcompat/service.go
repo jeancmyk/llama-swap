@@ -54,10 +54,22 @@ type Service struct {
 	mu   sync.RWMutex
 	memo map[string]memoEntry
 
+	// declinedMemo remembers which fields the user discarded for a key. Like
+	// memo, misses are memoized too, so the listing path does not re-query the
+	// store on every request.
+	declinedMemo map[string]memoDeclined
+
 	// inflight guards against stacking probes for the same key when a model
 	// flaps between ready and stopped.
 	inflightMu sync.Mutex
 	inflight   map[string]struct{}
+}
+
+// memoDeclined is a remembered Declined answer; found is false for a
+// remembered miss.
+type memoDeclined struct {
+	fields []string
+	found  bool
 }
 
 // memoEntry is a remembered lookup. found is false for a remembered miss.
@@ -70,10 +82,11 @@ type memoEntry struct {
 // lookups then only ever see what this process discovered.
 func New(cache store.CacheRepository, logger *logmon.Monitor) *Service {
 	return &Service{
-		cache:    cache,
-		logger:   logger,
-		memo:     make(map[string]memoEntry),
-		inflight: make(map[string]struct{}),
+		cache:        cache,
+		logger:       logger,
+		memo:         make(map[string]memoEntry),
+		declinedMemo: make(map[string]memoDeclined),
+		inflight:     make(map[string]struct{}),
 	}
 }
 
@@ -238,15 +251,106 @@ func (s *Service) read(ctx context.Context, key string) (Info, bool, error) {
 	return info, true, nil
 }
 
-// Forget drops the memoized answer for key, so the next Lookup reads the
-// store again. Used when the configuration behind a key may have changed.
+// Forget drops the memoized answers for key (capabilities and declined
+// fields), so the next Lookup reads the store again. Used when the
+// configuration behind a key may have changed.
 func (s *Service) Forget(key string) {
 	if s == nil {
 		return
 	}
 	s.mu.Lock()
 	delete(s.memo, key)
+	delete(s.declinedMemo, key)
 	s.mu.Unlock()
+}
+
+// declinedKey is the cache key for the discarded-fields record of key.
+func declinedKey(key string) string {
+	return "capcompat:v1:declined:" + key
+}
+
+// StoreDeclined records that the user discarded auto-filling the listed
+// fields for a model, so write-back and /v1/models stop offering them. The
+// record lives as long as discovered entries (cacheTTL). A nil or empty list
+// clears any existing record (the user accepted the fields in the meantime).
+func (s *Service) StoreDeclined(ctx context.Context, key string, fields []string) error {
+	if s == nil {
+		return nil
+	}
+	if len(fields) == 0 {
+		if s.cache != nil {
+			if err := s.cache.Delete(ctx, declinedKey(key)); err != nil {
+				return fmt.Errorf("capcompat: clearing declined fields for %s: %w", key, err)
+			}
+		}
+		s.mu.Lock()
+		s.declinedMemo[key] = memoDeclined{found: false}
+		s.mu.Unlock()
+		return nil
+	}
+	blob, err := json.Marshal(fields)
+	if err != nil {
+		return fmt.Errorf("capcompat: encoding declined fields for %s: %w", key, err)
+	}
+	if s.cache != nil {
+		if err := s.cache.Set(ctx, store.CacheEntry{Key: declinedKey(key), Data: blob, TTL: cacheTTL}); err != nil {
+			return fmt.Errorf("capcompat: storing declined fields for %s: %w", key, err)
+		}
+	}
+	s.mu.Lock()
+	s.declinedMemo[key] = memoDeclined{fields: fields, found: true}
+	s.mu.Unlock()
+	return nil
+}
+
+// Declined returns the field names the user discarded for key. found is false
+// when no record exists.
+func (s *Service) Declined(ctx context.Context, key string) ([]string, bool) {
+	if s == nil {
+		return nil, false
+	}
+	s.mu.RLock()
+	entry, memoized := s.declinedMemo[key]
+	s.mu.RUnlock()
+	if memoized {
+		return entry.fields, entry.found
+	}
+	if s.cache == nil {
+		return nil, false
+	}
+	row, found, err := s.cache.Get(ctx, declinedKey(key))
+	if err != nil || !found {
+		s.mu.Lock()
+		s.declinedMemo[key] = memoDeclined{found: false}
+		s.mu.Unlock()
+		return nil, false
+	}
+	var fields []string
+	if err := json.Unmarshal(row.Data, &fields); err != nil {
+		return nil, false
+	}
+	s.mu.Lock()
+	s.declinedMemo[key] = memoDeclined{fields: fields, found: true}
+	s.mu.Unlock()
+	return fields, true
+}
+
+// Drop removes the cached capabilities and the declined-fields record under
+// key, so the next probe starts from a clean slate.
+func (s *Service) Drop(ctx context.Context, key string) error {
+	if s == nil {
+		return nil
+	}
+	s.Forget(key)
+	if s.cache != nil {
+		if err := s.cache.Delete(ctx, key); err != nil {
+			return fmt.Errorf("capcompat: dropping %s: %w", key, err)
+		}
+		if err := s.cache.Delete(ctx, declinedKey(key)); err != nil {
+			return fmt.Errorf("capcompat: dropping declined record for %s: %w", key, err)
+		}
+	}
+	return nil
 }
 
 func (s *Service) remember(key string, caps config.ModelCapConfig, found bool) {

@@ -87,6 +87,29 @@ func (c ModelCapConfig) Merge(auto ModelCapConfig) ModelCapConfig {
 	return merged
 }
 
+// Except returns c with the listed fields zeroed. Field names are the marker
+// names (in, out, tools, reranker, context); unknown names are ignored.
+// It is used to stop advertising fields the user discarded from
+// auto-discovery.
+func (c ModelCapConfig) Except(fields []string) ModelCapConfig {
+	merged := c
+	for _, f := range fields {
+		switch f {
+		case "in":
+			merged.In = nil
+		case "out":
+			merged.Out = nil
+		case "tools":
+			merged.Tools = false
+		case "reranker":
+			merged.Reranker = false
+		case "context":
+			merged.Context = 0
+		}
+	}
+	return merged
+}
+
 // Validate checks that all modality values are recognized and context is
 // non-negative. Returns an error if any value is invalid.
 func (c ModelCapConfig) Validate() error {

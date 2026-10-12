@@ -60,6 +60,19 @@ is useful while you're still getting the YAML right:
 llama-swap -config config.yaml -validate
 ```
 
+## Editing config in the UI: save, then apply
+
+The model page and the add/remove dialogs edit the config file directly, but
+**Save** only writes the file. The running server keeps serving with the old
+settings, and the Models header shows "changes saved, not applied" with an
+**Apply changes** button. Apply is a hot reload — it stops running models,
+which then start on demand with the new settings.
+
+The split lets you queue several edits (a new context size, a renamed model,
+an added model) without churning running models, and choose the moment the
+restart happens. Editing the file by hand under `-watch-config` still
+reloads as before; only saves made through the UI wait for Apply.
+
 ## Ask, don't grep
 
 Once a model is running, open **Help** in the sidebar, pick a tool-capable

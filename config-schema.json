@@ -170,6 +170,11 @@
             "default": 0,
             "description": "Default TTL for all models in seconds, 0 means no TTL and models will never be automatically unloaded"
         },
+        "capabilitiesWriteback": {
+            "type": "boolean",
+            "default": false,
+            "description": "When true, capabilities discovered from a model's upstream are written into the primary config file under a pending marker comment, so the user can review and keep or discard them. Requires -config (a primary config file). When false (default), discovery only fills the in-memory/SQLite capability cache."
+        },
         "unloadTimeout": {
             "type": "integer",
             "minimum": 0,

@@ -60,6 +60,10 @@ func (s *Server) refreshCapabilities(modelID string, mc config.ModelConfig) {
 		return
 	}
 
+	// Optional durability: mirror what the cache learned into the config
+	// file, under the pending marker, when write-back is enabled.
+	s.persistDiscoveredCapabilities(modelID, mc, key)
+
 	// The listing pushed when this model went ready was built before the
 	// probe finished, so anything new has to announce itself.
 	if after := s.resolveCapabilities(s.shutdownCtx, modelID, mc); !reflect.DeepEqual(before, after) {
@@ -73,15 +77,21 @@ func (s *Server) refreshCapabilities(modelID string, mc config.ModelConfig) {
 //
 // Configured values win field by field, so a model that hand-sets one field
 // still benefits from discovery for the rest. A model with
-// capabilities.disableAuto gets exactly what its config says.
+// capabilities.disableAuto gets exactly what its config says. Fields the
+// user discarded from auto-filling are suppressed from the discovery fill
+// only — a value the user sets in the config still advertises.
 func (s *Server) resolveCapabilities(ctx context.Context, modelID string, mc config.ModelConfig) config.ModelCapConfig {
 	caps := mc.Capabilities
 	if caps.DisableAuto {
 		return caps
 	}
-	auto, found := s.capcompat.Lookup(ctx, capcompat.LocalKey(modelID, mc))
+	key := capcompat.LocalKey(modelID, mc)
+	auto, found := s.capcompat.Lookup(ctx, key)
 	if !found {
 		return caps
+	}
+	if declined, ok := s.capcompat.Declined(ctx, key); ok && len(declined) > 0 {
+		auto = auto.Except(declined)
 	}
 	return caps.Merge(auto)
 }

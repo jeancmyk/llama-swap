@@ -74,11 +74,26 @@ func extractCmdPaths(cmd string) (string, []modelFileInfo) {
 
 type modelConfigRequest struct {
 	YAML string `json:"yaml"`
+	// Reload controls the save/apply split. Omitted (nil) keeps the legacy
+	// all-in-one behavior: the write is followed by a hot reload. An explicit
+	// false saves to the file only; the change activates on the next reload
+	// (POST /api/reload) or restart.
+	Reload *bool `json:"reload,omitempty"`
 }
 
 // modelNameRequest is the payload of PATCH /api/models/config/{model}.
 type modelNameRequest struct {
-	Name string `json:"name"`
+	Name   string `json:"name"`
+	Reload *bool  `json:"reload,omitempty"`
+}
+
+// shouldReload resolves the request reload flag: a missing flag keeps the
+// legacy behavior (write + reload).
+func shouldReload(p *bool) bool {
+	if p == nil {
+		return true
+	}
+	return *p
 }
 
 // handleAPIGetModelConfig returns the raw YAML block for a local model from
@@ -130,7 +145,8 @@ func (s *Server) handleAPIGetModelConfig(w http.ResponseWriter, r *http.Request)
 }
 
 // handleAPIPutModelConfig patches a model's YAML block in the primary config
-// file and triggers a hot reload.
+// file. By default a hot reload follows; {"reload": false} saves without a
+// reload, activating the change on the next POST /api/reload (Apply).
 func (s *Server) handleAPIPutModelConfig(w http.ResponseWriter, r *http.Request) {
 	modelID := r.PathValue("model")
 
@@ -175,6 +191,7 @@ func (s *Server) handleAPIPutModelConfig(w http.ResponseWriter, r *http.Request)
 	}
 	if newMC, ok := newCfg.Models[modelID]; !ok {
 		swaputil.SendResponse(w, r, http.StatusBadRequest, "patched config lost the model being edited")
+		return
 	} else if strings.TrimSpace(newMC.Cmd) == "" {
 		swaputil.SendResponse(w, r, http.StatusBadRequest, "cmd cannot be empty")
 		return
@@ -185,25 +202,16 @@ func (s *Server) handleAPIPutModelConfig(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	s.logs.ProxyLogs.Infof("config for model %q updated via UI, triggering reload", modelID)
-
-	reloaded := false
-	if s.reloadFn != nil {
-		go s.reloadFn()
-		reloaded = true
-	}
-
-	swaputil.RespondJSON(w, r, http.StatusOK, map[string]any{
-		"status":    "ok",
-		"model_id":  modelID,
-		"reloading": reloaded,
-	})
+	reload := shouldReload(req.Reload)
+	s.logs.ProxyLogs.Infof("config for model %q updated via UI (reload=%t)", modelID, reload)
+	s.finishConfigWrite(w, r, modelID, reload)
 }
 
 // handleAPIPatchModelConfig sets the display `name` of models.<modelID> in
-// the primary config file and triggers a hot reload. An empty name clears the
-// field. Unlike the full-block PUT, this patch keeps every other setting and
-// comment in the model block byte-identical.
+// the primary config file. By default a hot reload follows; {"reload": false}
+// saves the name without a reload. An empty name clears the field. Unlike the
+// full-block PUT, this patch keeps every other setting and comment in the
+// model block byte-identical.
 func (s *Server) handleAPIPatchModelConfig(w http.ResponseWriter, r *http.Request) {
 	modelID := r.PathValue("model")
 
@@ -267,25 +275,15 @@ func (s *Server) handleAPIPatchModelConfig(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	s.logs.ProxyLogs.Infof("name for model %q updated to %q via UI, triggering reload", modelID, name)
-
-	reloaded := false
-	if s.reloadFn != nil {
-		go s.reloadFn()
-		reloaded = true
-	}
-
-	swaputil.RespondJSON(w, r, http.StatusOK, map[string]any{
-		"status":    "ok",
-		"model_id":  modelID,
-		"name":      name,
-		"reloading": reloaded,
-	})
+	reload := shouldReload(req.Reload)
+	s.logs.ProxyLogs.Infof("name for model %q updated to %q via UI (reload=%t)", modelID, name, reload)
+	s.finishConfigWrite(w, r, modelID, reload, map[string]any{"name": name})
 }
 
 // modelRenameRequest is the payload of POST /api/models/rename/{model}.
 type modelRenameRequest struct {
-	NewID string `json:"new_id"`
+	NewID  string `json:"new_id"`
+	Reload *bool  `json:"reload,omitempty"`
 }
 
 // handleAPIRenameModel renames the model's ID in the primary config file:
@@ -293,8 +291,9 @@ type modelRenameRequest struct {
 // routing groups, selectors, profile pins, startup preloads, matrix vars,
 // evict costs and set DSLs). Glob patterns, peer model lists and other
 // models' aliases are untouched. The model's URL, its /v1/models id and the
-// UI links all follow the new ID. A hot reload follows, so a running model
-// stops and starts under the new ID on its next request.
+// UI links all follow the new ID. By default a hot reload follows, so a
+// running model stops and starts under the new ID on its next request;
+// {"reload": false} saves the rename without a reload.
 func (s *Server) handleAPIRenameModel(w http.ResponseWriter, r *http.Request) {
 	oldID := r.PathValue("model")
 
@@ -375,20 +374,9 @@ func (s *Server) handleAPIRenameModel(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	s.logs.ProxyLogs.Infof("model %q renamed to %q via UI, triggering reload", oldID, newID)
-
-	reloaded := false
-	if s.reloadFn != nil {
-		go s.reloadFn()
-		reloaded = true
-	}
-
-	swaputil.RespondJSON(w, r, http.StatusOK, map[string]any{
-		"status":    "ok",
-		"model_id":  oldID,
-		"new_id":    newID,
-		"reloading": reloaded,
-	})
+	reload := shouldReload(req.Reload)
+	s.logs.ProxyLogs.Infof("model %q renamed to %q via UI (reload=%t)", oldID, newID, reload)
+	s.finishConfigWrite(w, r, oldID, reload, map[string]any{"new_id": newID})
 }
 
 // marshalModelConfigFallback renders an effective ModelConfig as YAML for
@@ -419,9 +407,11 @@ func validModelID(id string) bool {
 }
 
 // handleAPIAddModelConfig appends a new model block to the primary config
-// file and triggers a hot reload. The listeners block is intentionally left
-// untouched: new models are served by the main listener only, and never get
-// added to custom endpoint model lists automatically.
+// file. By default a hot reload follows, which is what makes the new model
+// servable; {"reload": false} saves it for a later POST /api/reload. The
+// listeners block is intentionally left untouched: new models are served by
+// the main listener only, and never get added to custom endpoint model lists
+// automatically.
 func (s *Server) handleAPIAddModelConfig(w http.ResponseWriter, r *http.Request) {
 	modelID := r.PathValue("model")
 	if !validModelID(modelID) {
@@ -480,27 +470,22 @@ func (s *Server) handleAPIAddModelConfig(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	s.logs.ProxyLogs.Infof("model %q added via UI, triggering reload", modelID)
-
-	reloaded := false
-	if s.reloadFn != nil {
-		go s.reloadFn()
-		reloaded = true
-	}
-
-	swaputil.RespondJSON(w, r, http.StatusOK, map[string]any{
-		"status":    "ok",
-		"model_id":  modelID,
-		"reloading": reloaded,
-	})
+	reload := shouldReload(req.Reload)
+	s.logs.ProxyLogs.Infof("model %q added via UI (reload=%t)", modelID, reload)
+	s.finishConfigWrite(w, r, modelID, reload)
 }
 
 // handleAPIRemoveModelConfig deletes a model's block from the primary config
-// file and triggers a hot reload. Exact-match references to the removed ID
-// are also pruned from custom listeners' model lists so no dangling entries
-// remain; glob patterns are preserved untouched.
+// file. By default a hot reload follows; ?reload=false saves the removal
+// without a reload. Exact-match references to the removed ID are also pruned
+// from custom listeners' model lists so no dangling entries remain; glob
+// patterns are preserved untouched.
 func (s *Server) handleAPIRemoveModelConfig(w http.ResponseWriter, r *http.Request) {
 	modelID := r.PathValue("model")
+	reload := true
+	if v := r.URL.Query().Get("reload"); v == "false" || v == "0" {
+		reload = false
+	}
 
 	if _, ok := s.cfg.Models[modelID]; !ok {
 		swaputil.SendResponse(w, r, http.StatusNotFound, fmt.Sprintf("model %q not found", modelID))
@@ -552,20 +537,8 @@ func (s *Server) handleAPIRemoveModelConfig(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	s.logs.ProxyLogs.Infof("model %q removed via UI (listeners pruned: %v), triggering reload", modelID, listenersPruned)
-
-	reloaded := false
-	if s.reloadFn != nil {
-		go s.reloadFn()
-		reloaded = true
-	}
-
-	swaputil.RespondJSON(w, r, http.StatusOK, map[string]any{
-		"status":           "ok",
-		"model_id":         modelID,
-		"reloading":        reloaded,
-		"listeners_pruned": listenersPruned,
-	})
+	s.logs.ProxyLogs.Infof("model %q removed via UI (listeners pruned: %v, reload=%t)", modelID, listenersPruned, reload)
+	s.finishConfigWrite(w, r, modelID, reload, map[string]any{"listeners_pruned": listenersPruned})
 }
 
 // handleAPIBackends lists unique backend executables across configured local

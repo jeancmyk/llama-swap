@@ -570,7 +570,20 @@ func main() {
 				(&configwatcher.Watcher{
 					Path:     absConfigPath,
 					Interval: configwatcher.DefaultInterval,
-					OnChange: reload,
+					OnChange: func() {
+						// llama-swap's own config writes (save-only UI edits,
+						// capability write-back) must not reload: the change
+						// is the one the user just saved, a reload would stop
+						// running models, and the file state already matches
+						// what the next explicit apply will read.
+						activeMu.RLock()
+						srv := activeSrv
+						activeMu.RUnlock()
+						if srv.IsSelfWrite(absConfigPath) {
+							return
+						}
+						reload()
+					},
 				}).Run(watcherCtx)
 			}()
 		}
