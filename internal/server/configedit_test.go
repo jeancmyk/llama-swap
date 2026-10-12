@@ -318,6 +318,18 @@ func TestProxy_ConfigAPI_GetReturnsPaths(t *testing.T) {
 	assert.Equal(t, "--model-draft", resp.ModelFiles[2].Flag)
 }
 
+func TestConfigEdit_ExtractCmdPaths_WindowsQuotedPaths(t *testing.T) {
+	// A Windows install path containing spaces must survive the tokenizer on
+	// both dialects: the double quotes hold the token together and backslashes
+	// stay literal inside double quotes under shlex.Windows and shlex.Posix
+	// alike, so the parsed paths are identical on every OS.
+	cmd := `"C:\Program Files\llama.cpp\llama-server.exe" --port ${PORT} -m "E:\LLM Models\m.gguf"`
+	backend, files := extractCmdPaths(cmd)
+	assert.Equal(t, `C:\Program Files\llama.cpp\llama-server.exe`, backend)
+	require.Len(t, files, 1)
+	assert.Equal(t, modelFileInfo{Flag: "-m", Path: `E:\LLM Models\m.gguf`}, files[0])
+}
+
 func TestProxy_ConfigAPI_BackendsListing(t *testing.T) {
 	s := editTestServer(t, "")
 	w := httptest.NewRecorder()

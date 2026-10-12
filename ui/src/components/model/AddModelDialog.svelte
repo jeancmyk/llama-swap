@@ -68,6 +68,13 @@
     onclose();
   }
 
+  // /api/backends yields dequoted paths; re-quote anything containing spaces
+  // so the generated cmd survives the config tokenizer on every OS.
+  function cmdPath(path: string): string {
+    const p = path.trim();
+    return /\s/.test(p) ? `"${p}"` : p;
+  }
+
   function buildYaml(): string {
     const files = [`-m "${mainFile.trim().replace(/\\/g, "/")}"`];
     for (const extra of extras) {
@@ -81,7 +88,7 @@
       "  llamaswap:",
       `    effective_context_per_slot: "${ctxSize}"`,
       "cmd: |",
-      `      ${backendPath.trim()} --jinja --port \${PORT} ${files.join(" ")} --fit on --fit-ctx 65536 --fit-target 1024 -fa on -ngl 99 -ctk q4_0 -ctv q4_0`,
+      `      ${cmdPath(backendPath)} --jinja --port \${PORT} ${files.join(" ")} --fit on --fit-ctx 65536 --fit-target 1024 -fa on -ngl 99 -ctk q4_0 -ctv q4_0`,
       `ttl: ${ttl}`,
       "",
     ].join("\n");
@@ -155,7 +162,7 @@
           <Input
             id="add-model-backend"
             class="font-mono text-xs"
-            placeholder="/opt/llama.cpp/llama-server"
+            placeholder="/path/to/llama-server"
             bind:value={backendPath}
           />
         {/if}
@@ -166,7 +173,7 @@
         <Input
           id="add-model-file"
           class="font-mono text-xs"
-          placeholder={"E:/LLM Models/org/model-Q4_K_M.gguf"}
+          placeholder={"/path/to/models/org/model-Q4_K_M.gguf"}
           bind:value={mainFile}
         />
       </div>
