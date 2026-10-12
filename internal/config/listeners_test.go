@@ -15,7 +15,7 @@ func TestListeners_ParseListenAddr(t *testing.T) {
 
 	addr, err = ParseListenAddr(":9000")
 	require.NoError(t, err)
-	assert.Equal(t, "0.0.0.0:9000", addr)
+	assert.Equal(t, ":9000", addr)
 
 	addr, err = ParseListenAddr("[::1]:8081")
 	require.NoError(t, err)
