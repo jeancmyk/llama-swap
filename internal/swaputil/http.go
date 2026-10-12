@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/base64"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"html"
@@ -154,6 +155,13 @@ func MarkClientClosed(w http.ResponseWriter, r *http.Request) bool {
 	}
 	marker.MarkStatus(StatusClientClosedRequest)
 	return true
+}
+
+// RespondJSON writes value as a JSON response with the given status.
+func RespondJSON(w http.ResponseWriter, _ *http.Request, status int, value any) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(value)
 }
 
 func SendError(w http.ResponseWriter, r *http.Request, err error) {

@@ -274,6 +274,23 @@ upstream:
     - ^\/ws(\/|$)
     - ^\/api\/jobs$
 
+# listeners: additional HTTP listeners, each serving a scoped set of models
+# - optional, default: none (only the -listen address is bound)
+# - the -listen address always serves every model; entries here add scoped ports on top
+# - each entry binds its own port; a port that cannot be bound is skipped with a warning
+# - name is optional (defaults to "port-<port>") and must be unique across listeners
+# - listen is host:port and must be unique across listeners; an empty host binds all interfaces
+# - models is a list of shell-style glob patterns (path.Match) matched against
+#   model IDs, aliases, selector IDs, and peer FQNs ("peer:model"); only matching
+#   models are served on that port, everything else is a 404
+# - changes hot-reload: added ports bind, removed ports close
+# listeners:
+#   - name: "roleplay"
+#     listen: "localhost:8091"
+#     models:
+#       - "rp-*"
+#       - "charlie"
+
 # profiles: named model ID replacements switched at runtime through the UI or API
 # - optional, default: empty dictionary
 # - one profile or none is active; hooks.on_startup.profile selects the profile

@@ -15,6 +15,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -112,6 +113,16 @@ func runValidate(configPath, configDir string, out io.Writer) int {
 	}
 	fmt.Fprintf(out, "config is valid: %d model(s), %d peer(s)\n", len(cfg.Models), len(cfg.Peers))
 	return 0
+}
+
+// listenerPortOnly extracts the port from a host:port address, falling back to
+// the input when it does not parse.
+func listenerPortOnly(addr string) string {
+	_, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	return port
 }
 
 func main() {
@@ -297,22 +308,160 @@ func main() {
 		proxyLog.Infof("Tailcat listening on virtual TCP port 80: %s", activeTailcat.Address())
 	}
 
-	httpServer := &http.Server{
-		Addr: listenAddr,
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	// ------------------------------------------------------------------
+	// Multi-listener support: each entry in cfg.listeners gets its own
+	// http.Server sharing the active llama-swap server, with a ListenerScope
+	// restricting which models requests may reach. An occupied port skips
+	// that listener with a CLI warning instead of failing startup.
+	// ------------------------------------------------------------------
+	type managedListener struct {
+		addr  string
+		srv   *http.Server
+		scope atomic.Pointer[server.ListenerScope]
+	}
+
+	var (
+		listenersMu sync.Mutex
+		managed     []*managedListener
+		bindFailed  = map[string]string{} // addr -> reason (reported via /api/listeners)
+	)
+
+	desiredScopes := func(cfg config.Config) []server.ListenerScope {
+		// The -listen address is always the primary listener serving every
+		// model; configured listeners add scoped ports on top.
+		scopes := []server.ListenerScope{{Name: "default", Listen: listenAddr, Patterns: []string{"*"}}}
+		for _, l := range cfg.Listeners {
+			scopes = append(scopes, *server.NewListenerScope(l))
+		}
+		return scopes
+	}
+
+	listenerHandler := func(ml *managedListener) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			r = r.WithContext(server.WithScope(r.Context(), ml.scope.Load()))
 			activeMu.RLock()
 			srv := activeSrv
 			activeMu.RUnlock()
 			srv.ServeHTTP(w, r)
-		}),
+		})
+	}
+
+	bindListener := func(sc server.ListenerScope) (*managedListener, error) {
+		ln, err := net.Listen("tcp", sc.Listen)
+		if err != nil {
+			return nil, err
+		}
+		ml := &managedListener{addr: sc.Listen}
+		ml.scope.Store(&sc)
+		ml.srv = &http.Server{Handler: listenerHandler(ml)}
+		go func() {
+			var serveErr error
+			if useTLS {
+				proxyLog.Infof("listener %q serving with TLS on https://%s", sc.Name, ml.addr)
+				serveErr = ml.srv.ServeTLS(ln, *flagCertFile, *flagKeyFile)
+			} else {
+				serveErr = ml.srv.Serve(ln)
+			}
+			if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+				slog.Error("http listener error", "addr", ml.addr, "error", serveErr)
+				os.Exit(1)
+			}
+		}()
+		return ml, nil
+	}
+
+	shutdownManaged := func(ml *managedListener, timeout time.Duration) {
+		ctx, cancel := context.WithTimeout(context.Background(), timeout)
+		defer cancel()
+		if err := ml.srv.Shutdown(ctx); err != nil {
+			proxyLog.Warnf("listener %s shutdown error: %v", ml.addr, err)
+		}
+	}
+
+	reconcileListeners := func(cfg config.Config) int {
+		scopes := desiredScopes(cfg)
+		desired := make(map[string]server.ListenerScope, len(scopes))
+		for _, sc := range scopes {
+			normalized, err := config.ParseListenAddr(sc.Listen)
+			if err != nil {
+				proxyLog.Warnf("listener %q: invalid address %q: %v", sc.Name, sc.Listen, err)
+				continue
+			}
+			sc.Listen = normalized
+			desired[normalized] = sc
+		}
+
+		listenersMu.Lock()
+		defer listenersMu.Unlock()
+		bindFailed = make(map[string]string)
+
+		kept := make([]*managedListener, 0, len(desired))
+		for _, ml := range managed {
+			sc, wanted := desired[ml.addr]
+			if wanted {
+				ml.scope.Store(&sc)
+				kept = append(kept, ml)
+				continue
+			}
+			proxyLog.Infof("listener %s (%s) removed from config, closing", ml.addr, ml.scope.Load().Name)
+			go shutdownManaged(ml, 5*time.Second)
+		}
+
+		existing := make(map[string]bool, len(kept))
+		for _, ml := range kept {
+			existing[ml.addr] = true
+		}
+		for addr, sc := range desired {
+			if existing[addr] {
+				continue
+			}
+			ml, err := bindListener(sc)
+			if err != nil {
+				bindFailed[addr] = err.Error()
+				proxyLog.Warnf("listener %q (%s): port unavailable, skipping (%v)", sc.Name, addr, err)
+				continue
+			}
+			kept = append(kept, ml)
+			patternCount := len(sc.Patterns)
+			proxyLog.Infof("llama-swap listening on http://%s (listener %q, %d model pattern(s))", addr, sc.Name, patternCount)
+			if !swaputil.IsLoopbackAddr(addr) {
+				proxyLog.Infof("listener %q is reachable by all hosts on the network, use localhost:%s to restrict to loopback only", sc.Name, listenerPortOnly(addr))
+			}
+		}
+		managed = kept
+		return len(managed)
+	}
+
+	listenerStatusProvider := func() []server.ListenerRuntimeStatus {
+		listenersMu.Lock()
+		defer listenersMu.Unlock()
+		statuses := make([]server.ListenerRuntimeStatus, 0, len(managed)+len(bindFailed))
+		for _, ml := range managed {
+			sc := ml.scope.Load()
+			statuses = append(statuses, server.ListenerRuntimeStatus{Name: sc.Name, Listen: ml.addr, Bound: true})
+		}
+		for addr, reason := range bindFailed {
+			statuses = append(statuses, server.ListenerRuntimeStatus{Name: "port-" + listenerPortOnly(addr), Listen: addr, Bound: false, Error: reason})
+		}
+		return statuses
 	}
 
 	// reload guards against overlapping reloads triggered by concurrent signals
 	// or file-watcher callbacks.
 	var reloading bool
 	var reloadMu sync.Mutex
+	var reload func()
 
-	reload := func() {
+	wireServerHooks := func(srv *server.Server) {
+		if *flagConfig != "" {
+			srv.SetConfigFile(*flagConfig)
+		}
+		srv.SetReloadFunc(func() { go reload() })
+		srv.SetListenerStatusFunc(listenerStatusProvider)
+	}
+	wireServerHooks(initialSrv)
+
+	reload = func() {
 		reloadMu.Lock()
 		if reloading {
 			reloadMu.Unlock()
@@ -363,6 +512,7 @@ func main() {
 			}
 			return
 		}
+		wireServerHooks(newSrv)
 
 		if currentTailcat != nil {
 			newSrv.SetTailcatAddress(currentTailcat.Address())
@@ -379,6 +529,8 @@ func main() {
 		activeStore = newStore
 		activeStorePath = newStorePath
 		activeMu.Unlock()
+
+		reconcileListeners(newCfg)
 
 		applyLogSettings(newCfg)
 		if perfMon != nil {
@@ -442,24 +594,14 @@ func main() {
 	sigChan := make(chan os.Signal, 1)
 	signal.Notify(sigChan, syscall.SIGINT, syscall.SIGTERM, syscall.SIGHUP)
 
-	go func() {
-		var startErr error
-		if useTLS {
-			proxyLog.Infof("llama-swap listening with TLS on https://%s", listenAddr)
-			startErr = httpServer.ListenAndServeTLS(*flagCertFile, *flagKeyFile)
-		} else {
-			proxyLog.Infof("llama-swap listening on http://%s", listenAddr)
-			startErr = httpServer.ListenAndServe()
-		}
-		if startErr != nil && !errors.Is(startErr, http.ErrServerClosed) {
-			slog.Error("http server error", "error", startErr)
-			os.Exit(1)
-		}
-	}()
-
-	if !swaputil.IsLoopbackAddr(listenAddr) {
-		_, port, _ := net.SplitHostPort(listenAddr)
-		proxyLog.Infof("llama-swap is reachable by all hosts on the network, use -listen localhost:%s to restrict to loopback only", port)
+	// Bind all configured listeners. Startup fails only when nothing could be
+	// bound at all.
+	if len(cfg.Listeners) > 0 && useTLS {
+		proxyLog.Warnf("TLS flags are ignored because listeners are configured in %s", *flagConfig)
+	}
+	if bound := reconcileListeners(cfg); bound == 0 {
+		slog.Error("no listeners could be bound, exiting")
+		os.Exit(1)
 	}
 
 	exitChan := make(chan struct{})
@@ -491,7 +633,7 @@ func main() {
 				tailcatRuntime := activeTailcat
 				activeMu.RUnlock()
 
-				// Close long-lived SSE streams first so httpServer.Shutdown can
+				// Close long-lived SSE streams first so listener Shutdown can
 				// drain without blocking on them for the full timeout.
 				srv.CloseStreams()
 
@@ -500,14 +642,27 @@ func main() {
 				deadline := time.Now().Add(shutdownTimeout)
 				shutdownCtx, cancel := context.WithDeadline(context.Background(), deadline)
 				defer cancel()
-				if err := httpServer.Shutdown(shutdownCtx); err != nil {
-					proxyLog.Warnf("http server shutdown error: %v", err)
+
+				listenersMu.Lock()
+				all := make([]*managedListener, len(managed))
+				copy(all, managed)
+				listenersMu.Unlock()
+				var wg sync.WaitGroup
+				for _, ml := range all {
+					wg.Add(1)
+					go func(ml *managedListener) {
+						defer wg.Done()
+						if err := ml.srv.Shutdown(shutdownCtx); err != nil {
+							proxyLog.Warnf("http server shutdown error (%s): %v", ml.addr, err)
+						}
+					}(ml)
 				}
 				if tailcatRuntime != nil {
 					if err := tailcatRuntime.Close(shutdownCtx); err != nil {
 						proxyLog.Warnf("Tailcat server shutdown error: %v", err)
 					}
 				}
+				wg.Wait()
 
 				// Clamp the remaining budget to a small positive value: a
 				// non-positive timeout makes the router fall back to its own
