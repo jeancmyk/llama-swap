@@ -10,8 +10,19 @@
   import { Input } from "$lib/components/ui/input/index.js";
 
   // Raw listener entries from the API. Checkbox selections are kept separate
-  // (keyed by listen address) so they stay reactive as models load.
-  let rawListeners = $state<ListenerInfo[]>([]);
+  // so they stay reactive as models load.
+  //
+  // Rows carry a synthetic `uid` rather than being keyed by listen address or
+  // name: those fields are edited in place, so using them as key/selection
+  // identity made the row re-render on every keystroke (losing focus) and
+  // orphaned the ticked models mid-edit.
+  type ListenerRow = ListenerInfo & { uid: string };
+  let nextUid = 0;
+  function withUid(l: ListenerInfo): ListenerRow {
+    return { ...l, uid: `l${nextUid++}` };
+  }
+
+  let rawListeners = $state<ListenerRow[]>([]);
   let selections = $state<Record<string, string[]>>({});
   let availableModels = $state<string[]>([]);
   let loadError = $state("");
@@ -48,14 +59,14 @@
     return (l.models ?? []).filter((p) => isGlob(p) || !checkableIds.includes(p));
   }
 
-  function selectedFor(l: ListenerInfo): string[] {
-    return selections[l.listen] ?? exactConfigured(l);
+  function selectedFor(l: ListenerRow): string[] {
+    return selections[l.uid] ?? exactConfigured(l);
   }
 
-  function toggleModel(l: ListenerInfo, id: string, checked: boolean) {
+  function toggleModel(l: ListenerRow, id: string, checked: boolean) {
     const current = selectedFor(l);
     const next = checked ? [...current, id] : current.filter((s) => s !== id);
-    selections = { ...selections, [l.listen]: next };
+    selections = { ...selections, [l.uid]: next };
   }
 
   function filteredModels(): string[] {
@@ -74,7 +85,7 @@
   $effect(() => {
     fetchListeners()
       .then((resp: ListenersResponse) => {
-        rawListeners = resp.listeners ?? [];
+        rawListeners = (resp.listeners ?? []).map(withUid);
         if (resp.available_models) availableModels = resp.available_models;
       })
       .catch((err) => {
@@ -83,7 +94,7 @@
   });
 
   function addListener() {
-    rawListeners = [...rawListeners, { name: "", listen: "127.0.0.1:", models: [] }];
+    rawListeners = [...rawListeners, withUid({ name: "", listen: "127.0.0.1:", models: [] })];
   }
 
   function removeListener(index: number) {
@@ -107,7 +118,7 @@
         "Saved. llama-swap is reloading — new ports open in a moment; running models stop and start on their next request.";
       fetchListeners()
         .then((resp) => {
-          rawListeners = resp.listeners ?? [];
+          rawListeners = (resp.listeners ?? []).map(withUid);
         })
         .catch(() => {});
     } catch (err) {
@@ -138,7 +149,7 @@
       <Input class="max-w-xs" placeholder="Filter models…" bind:value={filterText} />
     {/if}
 
-    {#each rawListeners as l, i (l.listen + String(i))}
+    {#each rawListeners as l, i (l.uid)}
       <div class="rounded-md border p-3 space-y-2">
         <div class="flex items-center gap-2">
           <Input class="w-36" placeholder="name" bind:value={l.name} />
