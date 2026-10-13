@@ -318,6 +318,10 @@ func main() {
 		addr  string
 		srv   *http.Server
 		scope atomic.Pointer[server.ListenerScope]
+		// closing is set before an intentional Shutdown so the serve
+		// goroutine can tell a reconcile-driven stop apart from a real
+		// listener failure (only the latter is fatal).
+		closing atomic.Bool
 	}
 
 	var (
@@ -362,7 +366,18 @@ func main() {
 			} else {
 				serveErr = ml.srv.Serve(ln)
 			}
-			if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) {
+			// A listener that stopped because reconcileListeners closed it is
+			// an expected part of a config reload, and Shutdown/Close can
+			// surface as something other than http.ErrServerClosed (notably
+			// net.ErrClosed when the listener is torn down mid-accept).
+			// Treat only *unexpected* failures as fatal, otherwise a routine
+			// config edit can exit the whole process and take every running
+			// model and any unsaved UI state with it.
+			if ml.closing.Load() {
+				proxyLog.Debugf("listener %s (%s) stopped for reconcile", ml.addr, sc.Name)
+				return
+			}
+			if serveErr != nil && !errors.Is(serveErr, http.ErrServerClosed) && !errors.Is(serveErr, net.ErrClosed) {
 				slog.Error("http listener error", "addr", ml.addr, "error", serveErr)
 				os.Exit(1)
 			}
@@ -371,6 +386,7 @@ func main() {
 	}
 
 	shutdownManaged := func(ml *managedListener, timeout time.Duration) {
+		ml.closing.Store(true)
 		ctx, cancel := context.WithTimeout(context.Background(), timeout)
 		defer cancel()
 		if err := ml.srv.Shutdown(ctx); err != nil {
@@ -662,6 +678,7 @@ func main() {
 				listenersMu.Unlock()
 				var wg sync.WaitGroup
 				for _, ml := range all {
+					ml.closing.Store(true)
 					wg.Add(1)
 					go func(ml *managedListener) {
 						defer wg.Done()
